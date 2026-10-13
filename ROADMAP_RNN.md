@@ -118,16 +118,16 @@ $$\mathcal{L} = \mathcal{L}_{\text{spelling}} + \lambda_{\text{key}} \mathcal{L}
 - [x] Implement Generic Configurable Recurrent Network engine (`modules/rnn.js`).
 - [x] Implement Pitch Speller Network with Multi-Task Heads (`speller/speller_network.js`).
 - [x] Implement Backpropagation Through Time (BPTT) and Adam optimizer with gradient clipping.
-- [x] Verify convergence on synthetic/canonical harmonic progressions and Line-of-Fifths augmentations (`examples/test_rnn_cpu.js`).
+- [x] Verify convergence on synthetic/canonical harmonic progressions and Line-of-Fifths augmentations (`test/test_rnn_cpu.js`).
 
 ### Phase 3: WebGPU WGSL Kernels for BiGRU
 - [x] Write WGSL Pre-projection Kernel: parallel GEMM $U = X \cdot W_{\text{in}}^T + b_{\text{in}}$ across all time steps.
 - [x] Write WGSL GRU Cell Compute Shader (`modules/gpu/shaders/gru.wgsl.js`):
   - Parallel workgroup vector operations across hidden dimension $H \le 256$ in on-chip SRAM (`var<workgroup>`).
   - Native WGSL activations for $\sigma(x)$ and $\tanh(x)$.
-- [x] Implement bidirectional sequential dispatch (Forward $0 \to T-1$, Backward $T-1 \to 0$) in `GpuBidirectionalGru` (`modules/gpu/bigru_layer.js`).
-- [x] Implement End-to-End Generic GPU Recurrent Network (`modules/gpu/recurrent_network.js`) and GPU Speller (`speller/gpu_speller_network.js`).
-- [x] Validate GPU recurrent states and end-to-end speller predictions against Phase 2 CPU reference engine (`examples/test_gpu_rnn.js`).
+- [x] Implement bidirectional sequential dispatch (Forward $0 \to T-1$, Backward $T-1 \to 0$) in `GpuBidirectionalGru` (`modules/rnn/gpu_bigru.js`).
+- [x] Implement End-to-End Generic GPU Recurrent Network (`modules/rnn/gpu_network.js`) and GPU Speller (`speller/gpu_speller_network.js`).
+- [x] Validate GPU recurrent states and end-to-end speller predictions against Phase 2 CPU reference engine (`test/test_gpu_rnn.js`).
 
 ### Phase 4: Training & Model Serialization
 - [x] Train the two-layer BiGRU on annotated sequence corpora (`speller/data/corpus.js`, `speller/train.js`).

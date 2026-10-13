@@ -1,5 +1,5 @@
 import { Matrix2D } from '../matrix.js';
-import { createStorageBuffer } from './buffer.js';
+import { createStorageBuffer } from '../gpu/buffer.js';
 
 /**
  * GPU Dense (Fully Connected) Layer

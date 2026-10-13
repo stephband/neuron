@@ -1,7 +1,7 @@
 import { initWebGPU } from '../modules/gpu/context.js';
 import { GpuOps } from '../modules/gpu/ops.js';
-import { GpuBidirectionalGru } from '../modules/gpu/bigru_layer.js';
-import { GpuRecurrentNetwork } from '../modules/gpu/recurrent_network.js';
+import { GpuBidirectionalGru } from '../modules/rnn/gpu_bigru.js';
+import { GpuRecurrentNetwork } from '../modules/rnn/gpu_network.js';
 import { readFromBuffer, createStorageBuffer } from '../modules/gpu/buffer.js';
 import { BidirectionalGru } from '../modules/rnn/bigru.js';
 import { GpuSpellerNetwork } from '../speller/gpu_speller_network.js';

@@ -7,7 +7,7 @@ import {
   GpuSoftmaxCrossEntropy,
   GpuAdam,
   GpuSequentialNetwork,
-} from '../modules/gpu/network.js';
+} from '../modules/nn/gpu_network.js';
 
 console.log('=== WebGPU End-to-End Neural Network Training (Phase 3) ===\n');
 

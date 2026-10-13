@@ -1,5 +1,5 @@
-import { createStorageBuffer, uploadToBuffer, readFromBuffer } from './buffer.js';
-import { GpuBidirectionalGru } from './bigru_layer.js';
+import { createStorageBuffer, uploadToBuffer, readFromBuffer } from '../gpu/buffer.js';
+import { GpuBidirectionalGru } from './gpu_bigru.js';
 
 /**
  * GpuRecurrentNetwork: End-to-End WebGPU Recurrent Neural Network

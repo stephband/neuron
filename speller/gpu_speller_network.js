@@ -1,4 +1,4 @@
-import { GpuRecurrentNetwork } from '../modules/gpu/recurrent_network.js';
+import { GpuRecurrentNetwork } from '../modules/rnn/gpu_network.js';
 import { NUM_CLASSES, keyToClass, classToKey } from './key_tpc.js';
 import { SequenceEncoder, FEATURE_DIM } from './sequence_encoder.js';
 

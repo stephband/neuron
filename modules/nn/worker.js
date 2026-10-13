@@ -11,7 +11,7 @@ import {
   GpuSoftmaxCrossEntropy,
   GpuAdam,
   GpuSequentialNetwork,
-} from '../gpu/network.js';
+} from './gpu_network.js';
 import { ReplayBuffer } from './replay_buffer.js';
 
 let device = null;

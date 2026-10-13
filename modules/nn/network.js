@@ -1,4 +1,4 @@
-import { Matrix2D } from './matrix.js';
+import { Matrix2D } from '../matrix.js';
 
 /**
  * Sequential Neural Network Container

@@ -1,4 +1,4 @@
-import { createStorageBuffer } from './buffer.js';
+import { createStorageBuffer } from '../gpu/buffer.js';
 
 /**
  * GpuBidirectionalGru: WebGPU-accelerated Recurrent Layer

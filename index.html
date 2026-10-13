@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neuron: WebGPU Neural Network & Continuous Learning</title>
+  <style>
+    :root {
+      --bg: #0f111a;
+      --card-bg: #181b26;
+      --card-border: #262c3d;
+      --accent-red: #ff4a6e;
+      --accent-blue: #00c6ff;
+      --accent-yellow: #ffd000;
+      --text: #e6e9f2;
+      --text-muted: #8b94a8;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    header {
+      width: 100%;
+      max-width: 1100px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.5px; }
+    h1 span { color: var(--accent-blue); }
+
+    .badge {
+      font-size: 0.8rem;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: #2a2215;
+      color: var(--accent-yellow);
+      border: 1px solid rgba(255, 208, 0, 0.3);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge.ready {
+      background: #112920;
+      color: #00e676;
+      border-color: rgba(0, 230, 118, 0.3);
+    }
+    .badge.error {
+      background: #2e1419;
+      color: var(--accent-red);
+      border-color: rgba(255, 74, 110, 0.3);
+    }
+
+    .main-container {
+      width: 100%;
+      max-width: 1100px;
+      display: grid;
+      grid-template-columns: 560px 1fr;
+      gap: 24px;
+    }
+
+    .canvas-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    canvas {
+      width: 520px;
+      height: 520px;
+      border-radius: 8px;
+      background: #131520;
+      cursor: crosshair;
+      border: 1px solid var(--card-border);
+    }
+
+    .canvas-legend {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      margin-top: 12px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      margin-bottom: 12px;
+      color: #cfd5e6;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .stat-box {
+      background: #12141c;
+      padding: 10px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .stat-label { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 4px; }
+    .stat-value { font-size: 1.1rem; font-weight: 700; color: #fff; }
+
+    .control-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      background: #252a3a;
+      color: #fff;
+      border: 1px solid #363d52;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    button:hover { background: #32394d; border-color: #4a5470; }
+    button:active { transform: translateY(1px); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    button.primary {
+      background: linear-gradient(135deg, #0080ff, #00c6ff);
+      border: none;
+      color: #fff;
+      font-weight: 700;
+      width: 100%;
+      padding: 12px;
+    }
+    button.primary:hover { opacity: 0.9; }
+
+    button.class-0-btn.active {
+      background: var(--accent-red);
+      border-color: var(--accent-red);
+      color: #fff;
+    }
+    button.class-1-btn.active {
+      background: var(--accent-blue);
+      border-color: var(--accent-blue);
+      color: #0f111a;
+      font-weight: 700;
+    }
+
+    select {
+      background: #252a3a;
+      color: #fff;
+      border: 1px solid #363d52;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+    }
+
+    .feedback-card {
+      border-color: rgba(255, 208, 0, 0.4);
+      background: #1c1d18;
+    }
+    .feedback-card.hidden { display: none; }
+
+    .bar-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 12px 0;
+    }
+    .bar-wrap {
+      height: 22px;
+      background: #12141c;
+      border-radius: 6px;
+      overflow: hidden;
+      position: relative;
+    }
+    .bar-fill {
+      height: 100%;
+      transition: width 0.2s ease;
+      display: flex;
+      align-items: center;
+      padding-left: 8px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #fff;
+    }
+    .bar-fill.red { background: var(--accent-red); }
+    .bar-fill.blue { background: var(--accent-blue); color: #000; }
+
+    .helper-text {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1><span>Neuron:</span> WebGPU Neural Network</h1>
+    <div id="statusBadge" class="badge">Initializing WebGPU...</div>
+  </header>
+
+  <div class="main-container">
+    <!-- Left: 2D Interactive Plot -->
+    <div class="canvas-card">
+      <canvas id="plotCanvas" width="520" height="520"></canvas>
+      <div class="canvas-legend">
+        <span>Click to add points | <b>Shift + Click</b> to test & give feedback</span>
+        <span>Points: <span id="pointCount">0</span></span>
+      </div>
+    </div>
+
+    <!-- Right: Controls & Telemetry -->
+    <div class="sidebar">
+      <!-- Telemetry -->
+      <div class="card">
+        <h2>Telemetry</h2>
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="stat-label">Loss</div>
+            <div id="lossValue" class="stat-value">--</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Accuracy</div>
+            <div id="accValue" class="stat-value">--</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Replay Memory</div>
+            <div id="memoryValue" class="stat-value">0 samples</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Training Controls -->
+      <div class="card">
+        <h2>Dataset & Training</h2>
+        <div class="control-row">
+          <button id="btnPresetXor">Preset: XOR</button>
+          <button id="btnPresetCircles">Preset: Circles</button>
+          <button id="btnClear">Clear</button>
+        </div>
+
+        <div class="control-row">
+          <button id="btnClass0" class="class-0-btn active">Add Class 0 (Red)</button>
+          <button id="btnClass1" class="class-1-btn">Add Class 1 (Blue)</button>
+        </div>
+
+        <div class="control-row" style="align-items: center; margin-top: 14px;">
+          <label style="font-size: 0.82rem; color: var(--text-muted); margin-right: 6px;">Epochs:</label>
+          <select id="epochSelect">
+            <option value="100">100 epochs</option>
+            <option value="200" selected>200 epochs</option>
+            <option value="400">400 epochs</option>
+          </select>
+        </div>
+
+        <button id="trainBtn" class="primary" style="margin-top: 8px;">Train Network (WebGPU)</button>
+        <p class="helper-text">
+          Dispatches entire training loop into a background Web Worker running WGSL compute shaders.
+        </p>
+      </div>
+
+      <!-- Human-in-the-Loop Continuous Learning -->
+      <div id="feedbackPanel" class="card feedback-card hidden">
+        <h2>Continuous Learning (Feedback)</h2>
+        <p id="feedbackInfo" style="font-size: 0.85rem; color: #ffd000; margin-bottom: 8px;">
+          Point selected
+        </p>
+
+        <div class="bar-container">
+          <div class="bar-wrap">
+            <div id="probBar0" class="bar-fill red" style="width: 50%;">Class 0: 50%</div>
+          </div>
+          <div class="bar-wrap">
+            <div id="probBar1" class="bar-fill blue" style="width: 50%;">Class 1: 50%</div>
+          </div>
+        </div>
+
+        <div class="control-row" style="margin-top: 10px;">
+          <button id="btnFeedbackCorrect" style="flex: 1;">Reinforce Prediction</button>
+          <button id="btnFeedbackClass0" style="color: var(--accent-red);">Set Class 0</button>
+          <button id="btnFeedbackClass1" style="color: var(--accent-blue);">Set Class 1</button>
+        </div>
+
+        <p class="helper-text">
+          <b>Experience Replay:</b> Web Worker pairs user correction with random historical memories to update GPU weights in real time without catastrophic forgetting.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

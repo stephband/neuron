@@ -1,0 +1,19 @@
+{
+  "version": "5",
+  "remote": {
+    "https://cdn.jsdelivr.net/gh/soundio/sequence@0.3.14/modules/event/event.js": "83007d3fc1d2c549797ea715c6f9383f6c70911f4fe0ec3485576989b20b9f03",
+    "https://cdn.jsdelivr.net/gh/soundio/sequence@0.3.14/modules/event/key.js": "6c30123523897a72607151f8621e71757aec055149800c67fd856dc05df5185c",
+    "https://cdn.jsdelivr.net/gh/soundio/sequence@0.3.14/modules/number/round-pow-2.js": "a0c280025a72a59fba396083276492ae886600cc486d5c25b3223ae872fb564d",
+    "https://cdn.jsdelivr.net/gh/soundio/sequence@0.3.14/modules/object/mirror.js": "7f3fdc8764f7b4553722aae056b0434bfd0dfc6477169959b3d202aa20aec63c",
+    "https://cdn.jsdelivr.net/gh/soundio/sequence@0.3.14/modules/pitch.js": "1b60266964051ec00966d4618c7f117d9ca22f41c550cbafe79c48c1d1c20051",
+    "https://cdn.jsdelivr.net/gh/stephband/fn/modules/arg.js": "8886e09cb323fe28f0018ab831780a8cf7089afdcd95ad71e3060031ba28f447",
+    "https://cdn.jsdelivr.net/gh/stephband/fn/modules/id.js": "9c90e26a082d67afdeb83fb64bd795c469f317dca5850c404d6a6f0aa82331dc",
+    "https://cdn.jsdelivr.net/gh/stephband/fn/modules/mod.js": "1d6c2c141c1104158942106de8b1f979e9ba17bc5bbdec6f7b9b3fe746560d19",
+    "https://cdn.jsdelivr.net/gh/stephband/fn/modules/noop.js": "3be7f93ead642d9f6bc860649ba683cf6d47e37fe7c63c6c8e17c3187140ba96",
+    "https://cdn.jsdelivr.net/gh/stephband/fn/modules/nothing.js": "a630a4e99485f66dceef4f6bcadf2ba933fa7b43968ee6467ddfd34445460be1",
+    "https://cdn.jsdelivr.net/gh/stephband/fn/modules/self.js": "c0208917a31ade85516ce45834e5bde94688f28f1bf821c867fd7f863a14af68",
+    "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.6/modules/mod.js": "1d6c2c141c1104158942106de8b1f979e9ba17bc5bbdec6f7b9b3fe746560d19",
+    "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.6/modules/remove.js": "1bde0421594633d8af4fdd7859c5ce1229eafb59395756c540a417f431bcebc5",
+    "https://cdn.jsdelivr.net/gh/stephband/midi@1.1.x/modules/note.js": "6ebbc2dbcffcc59b587fd4f25b2431e8f890616337c582db2ed7d9d427aa595b"
+  }
+}

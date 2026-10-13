@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "sequence/": "https://cdn.jsdelivr.net/gh/soundio/sequence@0.3.14/modules/",
+    "fn/": "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.6/modules/",
+    "midi/": "https://cdn.jsdelivr.net/gh/stephband/midi@1.1.x/modules/"
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}

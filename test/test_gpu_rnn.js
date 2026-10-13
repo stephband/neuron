@@ -3,7 +3,7 @@ import { GpuOps } from '../modules/gpu/ops.js';
 import { GpuBidirectionalGru } from '../modules/rnn/gpu_bigru.js';
 import { readFromBuffer, createStorageBuffer } from '../modules/gpu/buffer.js';
 import { BidirectionalGru } from '../modules/rnn/bigru.js';
-import { SpellerRNN } from '../speller/speller-rnn.js';
+import SpellerRNN from '../speller/speller-rnn.js';
 import { SpellerNetwork } from '../speller/speller_network.js';
 import { SequenceEncoder } from '../speller/sequence_encoder.js';
 import { SequenceAugmenter } from '../speller/augment.js';

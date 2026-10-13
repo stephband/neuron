@@ -36,10 +36,56 @@ export class GpuBidirectionalGru {
   }
 
   /**
-   * Upload weights from CPU BidirectionalGru or raw Float32Arrays
+   * Total number of float parameters in this recurrent layer
    */
-  loadWeights(weights) {
+  get parameterCount() {
+    const H = this.hiddenDim;
+    const singleDirection = 3 * H * this.inDim + 3 * H * H + 6 * H;
+    return this.bidirectional ? 2 * singleDirection : singleDirection;
+  }
+
+  /**
+   * Upload weights from flat Float32Array slice or weight dictionary
+   *
+   * @param {Float32Array|Object} weights - Flat weights or dictionary
+   * @param {number} [offset=0] - Starting float offset if flat array
+   * @returns {number} Number of floats consumed
+   */
+  loadWeights(weights, offset = 0) {
     const queue = this.device.queue;
+
+    if (weights instanceof Float32Array || weights instanceof ArrayBuffer) {
+      const flat = weights instanceof Float32Array ? weights : new Float32Array(weights);
+      const H = this.hiddenDim;
+      const inDim = this.inDim;
+
+      const size_Wih = 3 * H * inDim;
+      const size_Whh = 3 * H * H;
+      const size_b = 3 * H;
+
+      let cur = offset;
+      queue.writeBuffer(this.bufW_ih_fwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_Wih * 4);
+      cur += size_Wih;
+      queue.writeBuffer(this.bufW_hh_fwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_Whh * 4);
+      cur += size_Whh;
+      queue.writeBuffer(this.bufB_ih_fwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_b * 4);
+      cur += size_b;
+      queue.writeBuffer(this.bufB_hh_fwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_b * 4);
+      cur += size_b;
+
+      if (this.bidirectional) {
+        queue.writeBuffer(this.bufW_ih_bwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_Wih * 4);
+        cur += size_Wih;
+        queue.writeBuffer(this.bufW_hh_bwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_Whh * 4);
+        cur += size_Whh;
+        queue.writeBuffer(this.bufB_ih_bwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_b * 4);
+        cur += size_b;
+        queue.writeBuffer(this.bufB_hh_bwd, 0, flat.buffer, flat.byteOffset + cur * 4, size_b * 4);
+        cur += size_b;
+      }
+
+      return cur - offset;
+    }
 
     const wih_fwd = weights.Wih_fwd instanceof Float32Array ? weights.Wih_fwd : new Float32Array(weights.Wih_fwd);
     const bih_fwd = weights.bih_fwd instanceof Float32Array ? weights.bih_fwd : new Float32Array(weights.bih_fwd);
@@ -62,6 +108,8 @@ export class GpuBidirectionalGru {
       queue.writeBuffer(this.bufW_hh_bwd, 0, whh_bwd.buffer, whh_bwd.byteOffset, whh_bwd.byteLength);
       queue.writeBuffer(this.bufB_hh_bwd, 0, bhh_bwd.buffer, bhh_bwd.byteOffset, bhh_bwd.byteLength);
     }
+
+    return this.parameterCount;
   }
 
   /**

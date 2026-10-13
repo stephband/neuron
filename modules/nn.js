@@ -18,4 +18,3 @@ export {
   serializeWeights,
   exportAsModule,
 } from './serialize.js';
-export { deserializeWeights } from './deserialize.js';

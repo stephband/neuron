@@ -154,13 +154,13 @@ speller/
 
 ```javascript
 import { SpellerNetwork } from './speller/speller_network.js';
-import { deserializeWeights } from './modules/rnn.js';
+import deserializeWeights from './modules/deserialize.js';
 
 // Load pre-trained weights from binary or ES module
 const weightBuffer = await Deno.readFile('./speller/speller_weights.bin');
 
 const speller = new SpellerNetwork({ hiddenDim: 48 });
-deserializeWeights(speller, weightBuffer.buffer);
+speller.loadWeights(deserializeWeights(weightBuffer));
 
 // Input: Sequence note event array
 const events = [
@@ -184,14 +184,11 @@ console.log(results);
 ### Running Inference on WebGPU
 
 ```javascript
-import { SpellerRNN } from './speller/speller-rnn.js';
-import { deserializeWeights } from './modules/rnn.js';
+import SpellerRNN from './speller/speller-rnn.js';
 
-// Initializes WebGPU device and compute pipelines automatically
-const gpuSpeller = await SpellerRNN.create({ hiddenDim: 48 });
-
+// Initializes WebGPU, validates byte length, and loads weights in one step:
 const weightBuffer = await Deno.readFile('./speller/speller_weights.bin');
-deserializeWeights(gpuSpeller, weightBuffer.buffer);
+const gpuSpeller = await SpellerRNN.from({ hiddenDim: 48 }, weightBuffer);
 
 const results = await gpuSpeller.predictSequence(events);
 console.log(results);
@@ -200,10 +197,9 @@ console.log(results);
 Or with generic `RNN`:
 
 ```javascript
-import RNN, { deserializeWeights } from './modules/rnn.js';
+import RNN from './modules/rnn.js';
 
-const network = await RNN.create(config);
-deserializeWeights(network, weightBuffer.buffer);
+const network = await RNN.from(config, weightBuffer);
 const output = await network.predict(features, sequenceLength);
 ```
 

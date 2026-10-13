@@ -126,7 +126,7 @@ $$\mathcal{L} = \mathcal{L}_{\text{spelling}} + \lambda_{\text{key}} \mathcal{L}
   - Parallel workgroup vector operations across hidden dimension $H \le 256$ in on-chip SRAM (`var<workgroup>`).
   - Native WGSL activations for $\sigma(x)$ and $\tanh(x)$.
 - [x] Implement bidirectional sequential dispatch (Forward $0 \to T-1$, Backward $T-1 \to 0$) in `GpuBidirectionalGru` (`modules/rnn/gpu_bigru.js`).
-- [x] Implement End-to-End Generic GPU Recurrent Network (`modules/rnn/gpu_network.js`) and GPU Speller (`speller/gpu_speller_network.js`).
+- [x] Implement End-to-End Generic GPU Recurrent Network (`modules/rnn/gpu_network.js`) and GPU Speller (`speller/speller-rnn.js`).
 - [x] Validate GPU recurrent states and end-to-end speller predictions against Phase 2 CPU reference engine (`test/test_gpu_rnn.js`).
 
 ### Phase 4: Training & Model Serialization

@@ -1,6 +1,6 @@
 /**
  * WebGPU Context Initializer
- * 
+ *
  * Works seamlessly across:
  * - Deno CLI runtime
  * - Browser Main Thread
@@ -8,20 +8,13 @@
  */
 export async function initWebGPU(options = {}) {
   const gpu = typeof navigator !== 'undefined' ? navigator.gpu : null;
-  if (!gpu) {
-    throw new Error(
-      'WebGPU is not supported in this environment. ' +
-      'Please ensure you are using a WebGPU-enabled browser or Deno.'
-    );
-  }
+  if (!gpu) throw new Error('WebGPU navigator.gpu not supported');
 
   const adapter = await gpu.requestAdapter({
     powerPreference: options.powerPreference || 'high-performance',
   });
 
-  if (!adapter) {
-    throw new Error('Failed to obtain WebGPU adapter (no compatible GPU found).');
-  }
+  if (!adapter) throw new Error('Failed to obtain WebGPU adapter (no compatible GPU found).');
 
   const device = await adapter.requestDevice();
 

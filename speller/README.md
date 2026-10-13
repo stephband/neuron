@@ -137,7 +137,7 @@ speller/
 ├── augment.js               # Line-of-Fifths transposition augmentations
 ├── data/
 │   └── corpus.js            # Curated musical progressions and training corpus
-├── gpu_speller_network.js   # WebGPU-accelerated pitch speller inference
+├── speller-rnn.js   # WebGPU-accelerated pitch speller inference
 ├── key_tpc.js               # Coordinate math, Line of Fifths conversions & constants
 ├── sequence_encoder.js      # Encodes Sequence note events to tensors & decodes output
 ├── speller_network.js       # CPU SpellerNetwork class (BPTT, training & inference)
@@ -184,21 +184,27 @@ console.log(results);
 ### Running Inference on WebGPU
 
 ```javascript
-import { initWebGpu } from './modules/gpu/context.js';
-import { GpuOps } from './modules/gpu/ops.js';
-import { GpuSpellerNetwork } from './speller/gpu_speller_network.js';
+import { SpellerRNN } from './speller/speller-rnn.js';
 import { deserializeWeights } from './modules/rnn.js';
 
-const { device } = await initWebGpu();
-const gpuOps = new GpuOps(device);
-
-const gpuSpeller = new GpuSpellerNetwork(device, gpuOps, { hiddenDim: 48 });
+// Initializes WebGPU device and compute pipelines automatically
+const gpuSpeller = await SpellerRNN.create({ hiddenDim: 48 });
 
 const weightBuffer = await Deno.readFile('./speller/speller_weights.bin');
 deserializeWeights(gpuSpeller, weightBuffer.buffer);
 
 const results = await gpuSpeller.predictSequence(events);
 console.log(results);
+```
+
+Or with generic `RNN`:
+
+```javascript
+import RNN, { deserializeWeights } from './modules/rnn.js';
+
+const network = await RNN.create(config);
+deserializeWeights(network, weightBuffer.buffer);
+const output = await network.predict(features, sequenceLength);
 ```
 
 ---

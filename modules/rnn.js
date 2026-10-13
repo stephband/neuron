@@ -1,13 +1,6 @@
-// Recurrent Neural Network Engine
-export { RecurrentNetwork, LinearHead, softmax } from './rnn/network.js';
-export { GpuRecurrentNetwork } from './rnn/gpu_network.js';
-export { BidirectionalGru } from './rnn/bigru.js';
-export { GpuBidirectionalGru } from './rnn/gpu_bigru.js';
-export { GruCell } from './rnn/gru_cell.js';
-
-// Model serialization
-export {
-  serializeWeights,
-  deserializeWeights,
-  exportAsModule,
-} from './serialization.js';
+// WebGPU Recurrent Neural Network Runtime
+// Provides everything needed to run recurrent models on the GPU.
+export { default as default, RNN, RNN as GpuRecurrentNetwork } from './rnn/network-gpu.js';
+export { deserializeWeights } from './deserialize.js';
+export { initWebGPU } from './gpu/context.js';
+export { GpuOps } from './gpu/ops.js';

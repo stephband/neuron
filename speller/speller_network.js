@@ -1,10 +1,10 @@
-import { RecurrentNetwork } from '../modules/rnn.js';
+import { RecurrentNetwork } from '../modules/rnn/network-cpu.js';
 import { NUM_CLASSES, keyToClass, classToKey } from './key_tpc.js';
 import { SequenceEncoder, FEATURE_DIM } from './sequence_encoder.js';
 
 /**
  * SpellerNetwork: Musical Pitch Speller & Local Key Tracker
- * 
+ *
  * Specialized configuration of RecurrentNetwork for Sequence streams:
  * - 2-layer BiGRU (hiddenDim per direction)
  * - Priming state: conditioned on initial key signature along the Line of Fifths (35 classes)
@@ -68,7 +68,7 @@ export class SpellerNetwork extends RecurrentNetwork {
 
   /**
    * Forward pass across sequence of length T
-   * 
+   *
    * @param {Float32Array} X - Input features [T x inDim]
    * @param {number} T - Sequence length
    * @param {number} initialKey - Line-of-Fifths coordinate (-15 to 19)
@@ -89,7 +89,7 @@ export class SpellerNetwork extends RecurrentNetwork {
 
   /**
    * Computes multi-task cross-entropy losses and accuracies
-   * 
+   *
    * @param {Object} targets - { targetSpelling, targetKey }
    */
   computeLoss(targets) {
@@ -110,7 +110,7 @@ export class SpellerNetwork extends RecurrentNetwork {
 
   /**
    * Backward pass
-   * 
+   *
    * @param {Object} targets - { targetSpelling, targetKey }
    */
   backward(targets) {
@@ -141,7 +141,7 @@ export class SpellerNetwork extends RecurrentNetwork {
 
   /**
    * High-level inference on a Sequence event array
-   * 
+   *
    * @param {Array} events - Sequence events array
    * @param {Object} options - Optional overrides (e.g. initialKey)
    * @returns {Array} Array of decoded note objects with predicted TPC coordinates and names

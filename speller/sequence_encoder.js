@@ -1,5 +1,5 @@
 import roundPow2 from 'sequence/number/round-pow-2.js';
-import { tpcToClass, classToTpc, tpcToMidiPitchClass, NUM_CLASSES } from './key_tpc.js';
+import { tpcToClass, classToTpc, tpcToMidiPitchClass, NUM_CLASSES, toKeyName } from './key_tpc.js';
 
 export { roundPow2 };
 export const FEATURE_DIM = 32;
@@ -161,6 +161,8 @@ export class SequenceEncoder {
       results.push({
         tpc,
         key,
+        name: toKeyName(tpc),
+        keyName: key !== null ? toKeyName(key) : null,
       });
     }
 

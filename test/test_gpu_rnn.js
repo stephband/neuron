@@ -1,10 +1,9 @@
 import { initWebGPU } from '../modules/gpu/context.js';
 import { GpuOps } from '../modules/gpu/ops.js';
 import { GpuBidirectionalGru } from '../modules/rnn/gpu_bigru.js';
-import { GpuRecurrentNetwork } from '../modules/rnn/gpu_network.js';
 import { readFromBuffer, createStorageBuffer } from '../modules/gpu/buffer.js';
 import { BidirectionalGru } from '../modules/rnn/bigru.js';
-import { GpuSpellerNetwork } from '../speller/gpu_speller_network.js';
+import { SpellerRNN } from '../speller/speller-rnn.js';
 import { SpellerNetwork } from '../speller/speller_network.js';
 import { SequenceEncoder } from '../speller/sequence_encoder.js';
 import { SequenceAugmenter } from '../speller/augment.js';
@@ -76,7 +75,7 @@ const gpuUniOut = await readFromBuffer(device, bufUniOut, T * H * 4);
 assertClose(gpuUniOut, cpuUniOut, 1e-4, `Unidirectional GRU [T=${T}, Din=${inDim}, H=${H}]`);
 
 // 4. Verify End-to-End Pitch Speller on GPU
-console.log('\n4. Verifying End-to-End GpuSpellerNetwork on Canonical Musical Sequences...');
+console.log('\n4. Verifying End-to-End SpellerRNN on Canonical Musical Sequences...');
 
 // Progression in C major with secondary dominant (D7 -> G) and passing chromatic note (Bb)
 const eventsC = [
@@ -152,8 +151,8 @@ for (let epoch = 1; epoch <= 100; epoch++) {
   }
 }
 
-// Instantiate GpuSpellerNetwork and sync weights
-const gpuSpeller = new GpuSpellerNetwork(device, gpuOps, { hiddenDim: 48 });
+// Instantiate SpellerRNN and sync weights
+const gpuSpeller = new SpellerRNN(device, gpuOps, { hiddenDim: 48 });
 gpuSpeller.syncFromCpuNetwork(cpuSpeller);
 
 // 5. Run GPU Inference on C major progression

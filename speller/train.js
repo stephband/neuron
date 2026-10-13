@@ -1,7 +1,7 @@
 import {
   serializeWeights,
   exportAsModule,
-} from '../modules/serialization.js';
+} from '../modules/serialize.js';
 import { SpellerNetwork } from './speller_network.js';
 import { buildTrainingDataset, createBaseProgressions } from './data/corpus.js';
 
@@ -136,7 +136,7 @@ const binPath = new URL('./speller_weights.bin', import.meta.url);
 await Deno.writeFile(binPath, binaryWeights);
 console.log(`   ✓ Exported binary weights: ${binPath.pathname} (${(binaryWeights.byteLength / 1024).toFixed(1)} KB)`);
 
-const jsModuleCode = exportAsModule(network, '../modules/serialization.js');
+const jsModuleCode = exportAsModule(network, '../modules/deserialize.js');
 const jsPath = new URL('./speller_weights.js', import.meta.url);
 await Deno.writeTextFile(jsPath, jsModuleCode);
 console.log(`   ✓ Exported self-contained ES module: ${jsPath.pathname} (${(jsModuleCode.length / 1024).toFixed(1)} KB)`);

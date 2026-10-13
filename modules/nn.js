@@ -16,6 +16,6 @@ export { NeuralWorkerClient } from './nn/client.js';
 // Model serialization
 export {
   serializeWeights,
-  deserializeWeights,
   exportAsModule,
-} from './serialization.js';
+} from './serialize.js';
+export { deserializeWeights } from './deserialize.js';

@@ -139,6 +139,5 @@ console.log(`   ✓ Exported binary weights: ${binPath.pathname} (${(binaryWeigh
 const jsModuleCode = exportAsModule(network, '../modules/deserialize.js');
 const jsPath = new URL('./speller_weights.js', import.meta.url);
 await Deno.writeTextFile(jsPath, jsModuleCode);
-console.log(`   ✓ Exported self-contained ES module: ${jsPath.pathname} (${(jsModuleCode.length / 1024).toFixed(1)} KB)`);
-
+console.log(`   ✓ Exported self-contained ES module: ${ jsPath.pathname } (${( jsModuleCode.length / 1024).toFixed(1) } KB)`);
 console.log('\nSpeller Corpus Training & Model Serialization completed with 100% success!');

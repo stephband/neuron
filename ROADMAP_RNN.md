@@ -113,26 +113,26 @@ $$\mathcal{L} = \mathcal{L}_{\text{spelling}} + \lambda_{\text{key}} \mathcal{L}
   - Adjust MIDI pitches by $(7 \cdot \Delta) \pmod{12}$.
 
 ### Phase 2: CPU Reference Implementation (Deno / JS)
-- [x] Implement GRU Cell forward and backward pass in pure JavaScript (`modules/rnn/gru_cell.js`).
+- [x] Implement GRU Cell forward and backward pass in pure JavaScript (`modules/rnn/gru-cell.js`).
 - [x] Implement Bidirectional GRU layer (`modules/rnn/bigru.js`).
 - [x] Implement Generic Configurable Recurrent Network engine (`modules/rnn.js`).
-- [x] Implement Pitch Speller Network with Multi-Task Heads (`speller/speller_network.js`).
+- [x] Implement Pitch Speller Network with Multi-Task Heads (`speller/speller-network.js`).
 - [x] Implement Backpropagation Through Time (BPTT) and Adam optimizer with gradient clipping.
-- [x] Verify convergence on synthetic/canonical harmonic progressions and Line-of-Fifths augmentations (`test/test_rnn_cpu.js`).
+- [x] Verify convergence on synthetic/canonical harmonic progressions and Line-of-Fifths augmentations (`test/test-rnn-cpu.js`).
 
 ### Phase 3: WebGPU WGSL Kernels for BiGRU
 - [x] Write WGSL Pre-projection Kernel: parallel GEMM $U = X \cdot W_{\text{in}}^T + b_{\text{in}}$ across all time steps.
 - [x] Write WGSL GRU Cell Compute Shader (`modules/gpu/shaders/gru.wgsl.js`):
   - Parallel workgroup vector operations across hidden dimension $H \le 256$ in on-chip SRAM (`var<workgroup>`).
   - Native WGSL activations for $\sigma(x)$ and $\tanh(x)$.
-- [x] Implement bidirectional sequential dispatch (Forward $0 \to T-1$, Backward $T-1 \to 0$) in `GpuBidirectionalGru` (`modules/rnn/gpu_bigru.js`).
-- [x] Implement End-to-End Generic GPU Recurrent Network (`modules/rnn/gpu_network.js`) and GPU Speller (`speller/speller-rnn.js`).
-- [x] Validate GPU recurrent states and end-to-end speller predictions against Phase 2 CPU reference engine (`test/test_gpu_rnn.js`).
+- [x] Implement bidirectional sequential dispatch (Forward $0 \to T-1$, Backward $T-1 \to 0$) in `GpuBidirectionalGru` (`modules/rnn/gpu-bigru.js`).
+- [x] Implement End-to-End Generic GPU Recurrent Network (`modules/rnn/network-gpu.js`) and GPU Speller (`speller/speller-rnn.js`).
+- [x] Validate GPU recurrent states and end-to-end speller predictions against Phase 2 CPU reference engine (`test/test-gpu-rnn.js`).
 
 ### Phase 4: Training & Model Serialization
 - [x] Train the two-layer BiGRU on annotated sequence corpora (`speller/data/corpus.js`, `speller/train.js`).
 - [x] Evaluate spelling accuracy across tonal modulations (100% accuracy on held-out enharmonic test sets).
-- [x] Implement binary weight serialization (`Float32Array` export/import) with native `Uint8Array.fromBase64` / `.toBase64()` (`modules/serialization.js`, `speller/speller_weights.bin`, `speller/speller_weights.js`).
+- [x] Implement binary weight serialization (`Float32Array` export/import) with native `Uint8Array.fromBase64` / `.toBase64()` (`modules/serialize.js`, `speller/speller-weights.bin`, `speller/speller-weights.js`).
 - [x] Decouple generic recurrent engine (`modules/rnn.js`) from standalone music pitch speller project (`speller/`).
 
 ### Phase 5: Client API & Interactive Demonstration

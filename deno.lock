@@ -14,6 +14,10 @@
     "https://cdn.jsdelivr.net/gh/stephband/fn/modules/self.js": "c0208917a31ade85516ce45834e5bde94688f28f1bf821c867fd7f863a14af68",
     "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.6/modules/mod.js": "1d6c2c141c1104158942106de8b1f979e9ba17bc5bbdec6f7b9b3fe746560d19",
     "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.6/modules/remove.js": "1bde0421594633d8af4fdd7859c5ce1229eafb59395756c540a417f431bcebc5",
+    "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.6/modules/weak-cache.js": "f85b8de28329e8eccc9df1a9f815e83dc12fcd26a96ac440cc938ff872d367f0",
+    "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.7/modules/mod.js": "1d6c2c141c1104158942106de8b1f979e9ba17bc5bbdec6f7b9b3fe746560d19",
+    "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.7/modules/remove.js": "1bde0421594633d8af4fdd7859c5ce1229eafb59395756c540a417f431bcebc5",
+    "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.7/modules/weak-cache.js": "197faeaf5949d13a912f380bc4c61542ca4c943d35b4233b0fdfbaebfa8e3992",
     "https://cdn.jsdelivr.net/gh/stephband/midi@1.1.x/modules/note.js": "6ebbc2dbcffcc59b587fd4f25b2431e8f890616337c582db2ed7d9d427aa595b"
   }
 }

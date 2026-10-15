@@ -1,4 +1,4 @@
-import { GruCell } from './gru_cell.js';
+import { GruCell } from './gru-cell.js';
 
 /**
  * GruLayer (Supports Unidirectional and Bidirectional GRU)

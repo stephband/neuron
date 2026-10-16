@@ -2,11 +2,10 @@ import { initWebGPU } from "../modules/gpu/context.js";
 import { GpuBidirectionalGru } from "../modules/rnn/gpu-bigru.js";
 import { createStorageBuffer, readFromBuffer } from "../modules/gpu/buffer.js";
 import { BidirectionalGru } from "../modules/rnn/bigru.js";
-import SpellerRNN from "../speller/speller-rnn.js";
-import { toKeyName } from "../speller/key-tpc.js";
-import modelWeights from "../speller/speller-weights.js";
+import RNN from "../modules/rnn.js";
+import RecurrentNetwork from "../modules/rnn/network-cpu.js";
 
-console.log("=== WebGPU Recurrent Neural Network Verification (Phase 3) ===\n");
+console.log("=== WebGPU Recurrent Neural Network Verification ===\n");
 
 // 1. Initialize WebGPU
 const { device, adapter } = await initWebGPU();
@@ -89,74 +88,70 @@ assertClose(
     `Unidirectional GRU [T=${T}, Din=${inDim}, H=${H}]`,
 );
 
-// 4. Verify End-to-End Pitch Speller on GPU
+// 4. Verify End-to-End Hierarchical Multi-Head RNN on GPU against CPU
 console.log(
-    "\n4. Verifying End-to-End SpellerRNN on Canonical Musical Sequences...",
+    "\n4. Verifying End-to-End Generic RecurrentNetwork on GPU vs CPU...",
 );
 
-// Progression in C major with secondary dominant (D7 -> G) and passing chromatic note (Bb)
-const eventsC = [
-    [0.0, "key", 0], // C major
-    [0.0, "note", 60, 0.8, 1.0], // C4  (TPC: 0, C)
-    [1.0, "note", 64, 0.8, 1.0], // E4  (TPC: 4, E)
-    [2.0, "note", 67, 0.8, 1.0], // G4  (TPC: 1, G)
-    [3.0, "note", 66, 0.8, 1.0], // F#4 (TPC: 6, F# -> secondary dominant)
-    [4.0, "note", 67, 0.8, 1.0], // G4  (TPC: 1, G)
-    [5.0, "note", 72, 0.8, 1.0], // C5  (TPC: 0, C)
-    [6.0, "note", 71, 0.8, 0.5], // B4  (TPC: 5, B)
-    [6.5, "note", 70, 0.8, 0.5], // Bb4 (TPC: -2, Bb -> chromatic passing flat)
-    [7.0, "note", 69, 0.8, 1.0], // A4  (TPC: 3, A)
-];
+const rnnDefinition = {
+    inDim: 16,
+    layers: [
+        { hiddenDim: 32, bidirectional: true },
+        { hiddenDim: 32, bidirectional: true },
+    ],
+    priming: {
+        inDim: 8,
+        type: "categorical",
+    },
+    heads: [
+        { name: "head_alpha", layerIndex: 0, outDim: 6 },
+        { name: "head_beta", layerIndex: 1, outDim: 10 },
+    ],
+};
 
-// Progression in Eb major with descending passing tone (Gb)
-const eventsEb = [
-    [0.0, "key", -3], // Eb major
-    [0.0, "note", 63, 0.8, 1.0], // Eb4 (TPC: -3, Eb)
-    [1.0, "note", 68, 0.8, 1.0], // Ab4 (TPC: -4, Ab)
-    [2.0, "note", 66, 0.8, 0.5], // Gb4 (TPC: -6, Gb -> descending passing tone)
-    [2.5, "note", 65, 0.8, 1.0], // F4  (TPC: -1, F)
-    [3.5, "note", 63, 0.8, 1.0], // Eb4 (TPC: -3, Eb)
-];
+const cpuNet = new RecurrentNetwork(rnnDefinition);
+const gpuNet = new RNN(device, rnnDefinition);
+gpuNet.syncFromCpuNetwork(cpuNet);
 
-// 4. Instantiate SpellerRNN with pre-trained weights
-console.log("4. Initializing SpellerRNN with pre-trained weights...");
-const gpuSpeller = await SpellerRNN.from(modelWeights, device);
+const seqT = 5;
+const seqX = new Float32Array(seqT * rnnDefinition.inDim);
+for (let i = 0; i < seqX.length; i++) seqX[i] = (Math.random() - 0.5) * 2;
 
-// 5. Run GPU Inference on C major progression
-const t0 = performance.now();
-const gpuPredsC = await gpuSpeller.predictSequence(eventsC);
-const gpuTime = (performance.now() - t0).toFixed(2);
+const conditionClass = 3;
+const cpuOut = cpuNet.forward(seqX, seqT, { condition: conditionClass });
+const gpuOut = await gpuNet.predict(seqX, seqT, { condition: conditionClass });
 
-console.log(`   ✓ GPU predicted C major progression in ${gpuTime} ms`);
-
-// Verify Note 3 (F# secondary dominant)
-const note3 = gpuPredsC[3];
-console.log(
-    `   Note 3 (MIDI 66 in C major): predicted ${
-        toKeyName(note3.tpc)
-    } (TPC ${note3.tpc}) | Target: F♯`,
+assertClose(
+    gpuOut.head_alpha.probs,
+    cpuOut.head_alpha.probs,
+    1e-4,
+    "Head Alpha Probs",
 );
-if (note3.tpc !== 6) throw new Error(`Expected F♯ (6), got ${note3.tpc}`);
-
-// Verify Note 7 (Bb passing flat)
-const note7 = gpuPredsC[7];
-console.log(
-    `   Note 7 (MIDI 70 in C major): predicted ${
-        toKeyName(note7.tpc)
-    } (TPC ${note7.tpc}) | Target: B♭`,
+assertClose(
+    gpuOut.head_beta.probs,
+    cpuOut.head_beta.probs,
+    1e-4,
+    "Head Beta Probs",
 );
-if (note7.tpc !== -2) throw new Error(`Expected B♭ (-2), got ${note7.tpc}`);
 
-// 6. Run GPU Inference on Eb major progression
-const gpuPredsEb = await gpuSpeller.predictSequence(eventsEb);
-const noteGb = gpuPredsEb[2];
-console.log(
-    `   Note 2 (MIDI 66 in E♭ major): predicted ${
-        toKeyName(noteGb.tpc)
-    } (TPC ${noteGb.tpc}) | Target: G♭`,
-);
-if (noteGb.tpc !== -6) throw new Error(`Expected G♭ (-6), got ${noteGb.tpc}`);
+for (let t = 0; t < seqT; t++) {
+    if (gpuOut.head_alpha.preds[t] !== cpuOut.head_alpha.preds[t]) {
+        throw new Error(
+            `Head Alpha prediction mismatch at step ${t}: GPU=${
+                gpuOut.head_alpha.preds[t]
+            }, CPU=${cpuOut.head_alpha.preds[t]}`,
+        );
+    }
+    if (gpuOut.head_beta.preds[t] !== cpuOut.head_beta.preds[t]) {
+        throw new Error(
+            `Head Beta prediction mismatch at step ${t}: GPU=${
+                gpuOut.head_beta.preds[t]
+            }, CPU=${cpuOut.head_beta.preds[t]}`,
+        );
+    }
+}
+console.log("   ✓ All head predictions match 100% between CPU and GPU!");
 
 console.log(
-    "\nAll Phase 3 WebGPU WGSL recurrent kernels and GPU networks verified with 100% precision!",
+    "\nAll WebGPU WGSL recurrent kernels and GPU networks verified with 100% precision!",
 );

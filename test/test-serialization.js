@@ -1,83 +1,100 @@
+import { initWebGPU } from "../modules/gpu/context.js";
+import { serializeWeights } from "../modules/serialize.js";
 import deserializeWeights from "../modules/deserialize.js";
-import SpellerRNN from "../speller/speller-rnn.js";
-import { SpellerNetwork } from "../speller/speller-network.js";
-import modelWeights from "../speller/speller-weights.js";
+import RNN from "../modules/rnn.js";
+import RecurrentNetwork from "../modules/rnn/network-cpu.js";
 
-console.log("=== Bare Weights Serialization Round-Trip ===\n");
+console.log("=== Bare Weights Serialization & GPU/CPU Round-Trip ===\n");
 
-const bytes = await Deno.readFile(
-    new URL("../speller/speller-weights.bin", import.meta.url),
+// 1. Initialize WebGPU
+const { device } = await initWebGPU();
+
+// 2. Define Generic Architecture
+const definition = {
+    inDim: 12,
+    layers: [
+        { hiddenDim: 24, bidirectional: true },
+        { hiddenDim: 24, bidirectional: true },
+    ],
+    priming: {
+        inDim: 6,
+        type: "categorical",
+    },
+    heads: [
+        { name: "out_a", layerIndex: 0, outDim: 5 },
+        { name: "out_b", layerIndex: 1, outDim: 8 },
+    ],
+};
+
+// 3. Instantiate CPU Network & Export Bare Binary Weights
+const cpuSource = new RecurrentNetwork(definition);
+const expectedFloats = cpuSource.parameters.reduce(
+    (sum, p) => sum + p.weight.length,
+    0,
 );
+const bytes = serializeWeights(cpuSource);
 
-const cpu = new SpellerNetwork();
-const expected = cpu.parameters.reduce((sum, p) => sum + p.weight.length, 0);
-if (bytes.byteLength !== expected * 4) {
+if (bytes.byteLength !== expectedFloats * 4) {
     throw new Error(
-        `.bin is ${bytes.byteLength} bytes, expected ${expected * 4}`,
+        `Binary size mismatch: got ${bytes.byteLength} bytes, expected ${
+            expectedFloats * 4
+        }`,
     );
 }
 console.log(
-    `   ✓ speller-weights.bin is bare: ${bytes.byteLength} bytes = ${expected} floats`,
+    `   ✓ Serialized network to bare binary: ${bytes.byteLength} bytes = ${expectedFloats} floats`,
 );
 
-// CPU loads flat Float32Array deserialized from bytes
-const flatFloats = deserializeWeights(bytes);
-cpu.loadWeights(flatFloats);
-
-// GPU initializes, validates byte length, and loads in one step via SpellerRNN.from()
-const gpu = await SpellerRNN.from(bytes);
-
-if (modelWeights.byteLength !== expected * 4) {
-    throw new Error("ES module modelWeights length mismatch");
+// 4. Test Deserialization
+const deserializedFloats = deserializeWeights(bytes);
+if (deserializedFloats.length !== expectedFloats) {
+    throw new Error(
+        `Deserialized float count mismatch: got ${deserializedFloats.length}`,
+    );
 }
-console.log("   ✓ speller-weights.js decodes to the same float count");
+console.log("   ✓ deserializeWeights() reproduced identical float count.");
 
-// Wrong-length data must be rejected by SpellerRNN.from()
+// 5. Test Invalid Length Rejection on GPU
 let threw = false;
 try {
-    await SpellerRNN.from(bytes.subarray(0, bytes.byteLength - 4));
+    await RNN.from(definition, bytes.subarray(0, bytes.byteLength - 4), device);
 } catch {
     threw = true;
 }
-
 if (!threw) {
-    throw new Error("Truncated weights were not rejected by SpellerRNN.from()");
+    throw new Error("Truncated weights were not rejected by RNN.from()");
 }
-console.log(
-    "   ✓ Truncated weights rejected by SpellerRNN.from() byteLength check",
-);
+console.log("   ✓ Truncated weights correctly rejected by byteLength check.");
 
-const events = [
-    [0.0, "key", 0],
-    [0.0, "note", 60, 0.8, 1.0],
-    [1.0, "note", 64, 0.8, 1.0],
-    [2.0, "note", 66, 0.8, 0.5],
-    [2.5, "note", 67, 0.8, 1.0],
-    [3.5, "note", 66, 0.8, 0.5],
-    [4.0, "note", 65, 0.8, 1.0],
-];
+// 6. Load Binary Weights into Fresh CPU and GPU Instances
+const cpuReloaded = new RecurrentNetwork(definition, bytes);
+const gpuFromFactory = await RNN.from(definition, bytes, device);
+const gpuFromConstructor = new RNN(device, definition, bytes);
 
-const cpuPreds = cpu.predictSequence(events).map((p) => p.tpc);
-const gpuPreds = (await gpu.predictSequence(events)).map((p) => p.tpc);
-console.log(`   CPU: ${cpuPreds.join(", ")}`);
-console.log(`   GPU: ${gpuPreds.join(", ")}`);
+// 7. Verify Predictions Match Across CPU and GPU
+const T = 6;
+const X = new Float32Array(T * definition.inDim);
+for (let i = 0; i < X.length; i++) X[i] = (Math.random() - 0.5) * 2;
+const condition = 2;
 
-const target = [0, 4, 6, 1, -6, -1];
-if (cpuPreds.join() !== target.join()) {
-    throw new Error("CPU predictions wrong after load");
-}
-if (gpuPreds.join() !== target.join()) {
-    throw new Error("GPU predictions wrong after load");
-}
+const cpuOut = cpuReloaded.forward(X, T, { condition });
+const gpuOut1 = await gpuFromFactory.predict(X, T, { condition });
+const gpuOut2 = await gpuFromConstructor.predict(X, T, { condition });
 
-// Verify constructor directly accepts weights
-const gpuFromConstructor = new SpellerRNN(gpu.device, bytes);
-const gpuConstructorPreds = (await gpuFromConstructor.predictSequence(events))
-    .map((p) => p.tpc);
-if (gpuConstructorPreds.join() !== target.join()) {
-    throw new Error("GPU constructor weight loading mismatch");
+for (let t = 0; t < T; t++) {
+    if (cpuOut.out_a.preds[t] !== gpuOut1.out_a.preds[t]) {
+        throw new Error(`out_a prediction mismatch at step ${t}`);
+    }
+    if (cpuOut.out_b.preds[t] !== gpuOut1.out_b.preds[t]) {
+        throw new Error(`out_b prediction mismatch at step ${t}`);
+    }
+    if (gpuOut1.out_a.preds[t] !== gpuOut2.out_a.preds[t]) {
+        throw new Error(
+            `Constructor vs Factory prediction mismatch at step ${t}`,
+        );
+    }
 }
 
 console.log(
-    "   ✓ CPU and GPU spellers both reproduce trained predictions from bare weights",
+    "   ✓ CPU and GPU networks both reproduce identical predictions from bare binary weights!",
 );

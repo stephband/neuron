@@ -4,6 +4,7 @@ import {
     uploadToBuffer,
 } from "../gpu/buffer.js";
 import GPUOps from "../gpu/ops.js";
+import { normalizeWeights } from "../deserialize.js";
 import { GpuBidirectionalGru } from "./gpu-bigru.js";
 
 /**
@@ -120,7 +121,7 @@ export default class RNN {
     }
 
     /**
-     * Synchronize weights from a trained CPU RecurrentNetwork or SpellerNetwork
+     * Synchronize weights from a trained CPU RecurrentNetwork
      */
     syncFromCpuNetwork(cpuNet) {
         // 1. Priming weights
@@ -180,47 +181,7 @@ export default class RNN {
      * @param {Float32Array|ArrayBuffer|Object} weights - Flat weights or dictionary
      */
     loadWeights(weights) {
-        if (weights.byteLength % 4 !== 0) {
-            throw new Error(
-                `Invalid weights byte length ${weights.byteLength} not a multiple of 4`,
-            );
-        }
-
-        const floatCount = weights.byteLength / 4;
-        if (floatCount !== this.parameterCount) {
-            throw new Error(
-                `Weights length mismatch: got ${floatCount} floats (${weights.byteLength} bytes), model expects ${this.parameterCount} floats (${
-                    this.parameterCount * 4
-                } bytes)`,
-            );
-        }
-
-        let flat;
-        if (weights instanceof Float32Array) {
-            flat = weights;
-        } else {
-            const buffer = ArrayBuffer.isView(weights)
-                ? weights.buffer
-                : weights;
-            const byteOffset = ArrayBuffer.isView(weights)
-                ? weights.byteOffset
-                : 0;
-            const byteLength = weights.byteLength;
-            if (byteOffset % 4 === 0) {
-                flat = new Float32Array(buffer, byteOffset, byteLength / 4);
-            } else {
-                flat = new Float32Array(
-                    buffer.slice(byteOffset, byteOffset + byteLength),
-                );
-            }
-        }
-
-        if (flat.length !== this.parameterCount) {
-            throw new Error(
-                `Weights length mismatch: got ${flat.length} floats, model expects ${this.parameterCount}`,
-            );
-        }
-
+        const flat = normalizeWeights(weights, this.parameterCount);
         let offset = 0;
 
         // 1. Priming projection

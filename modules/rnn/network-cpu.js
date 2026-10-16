@@ -1,4 +1,5 @@
 import { Matrix2D } from "../matrix.js";
+import { normalizeWeights } from "../deserialize.js";
 import { BidirectionalGru } from "./bigru.js";
 import LinearHead from "./linear-head.js";
 
@@ -484,7 +485,7 @@ export default class RecurrentNetwork {
      * Trains the recurrent network over multiple epochs on a dataset.
      *
      * @param {Array<Object>} dataset - Array of samples:
-     *   { features|X|input, length|noteCount|T, condition|initialKey|h0, targets }
+     *   { features|X|input, length|T, condition|h0, targets }
      * @param {Object} [options]
      * @param {number} [options.epochs=80] - Number of epochs
      * @param {number} [options.lr=0.01] - Adam learning rate
@@ -522,9 +523,8 @@ export default class RecurrentNetwork {
 
             for (const sample of dataset) {
                 const X = sample.features || sample.X || sample.input;
-                const T = sample.length ?? sample.noteCount ?? sample.T;
-                const condition = sample.condition ?? sample.initialKey ??
-                    sample.h0;
+                const T = sample.length ?? sample.T;
+                const condition = sample.condition ?? sample.h0;
                 const targets = sample.targets || sample.namedTargets || sample;
 
                 const step = this.trainStep(X, T, condition, targets, lr);
@@ -603,45 +603,16 @@ export default class RecurrentNetwork {
         };
     }
 
+    get parameterCount() {
+        return this.parameters.reduce((sum, p) => sum + p.weight.length, 0);
+    }
+
     loadWeights(weightsOrArray) {
         if (
-            weightsOrArray instanceof Float32Array ||
             weightsOrArray instanceof ArrayBuffer ||
             ArrayBuffer.isView(weightsOrArray)
         ) {
-            if (weightsOrArray.byteLength % 4 !== 0) {
-                throw new Error(
-                    `Invalid weights byte length ${weightsOrArray.byteLength} not a multiple of 4`,
-                );
-            }
-            let flat;
-            if (weightsOrArray instanceof Float32Array) {
-                flat = weightsOrArray;
-            } else {
-                const buffer = ArrayBuffer.isView(weightsOrArray)
-                    ? weightsOrArray.buffer
-                    : weightsOrArray;
-                const byteOffset = ArrayBuffer.isView(weightsOrArray)
-                    ? weightsOrArray.byteOffset
-                    : 0;
-                const byteLength = weightsOrArray.byteLength;
-                if (byteOffset % 4 === 0) {
-                    flat = new Float32Array(buffer, byteOffset, byteLength / 4);
-                } else {
-                    flat = new Float32Array(
-                        buffer.slice(byteOffset, byteOffset + byteLength),
-                    );
-                }
-            }
-            const expected = this.parameters.reduce(
-                (sum, p) => sum + p.weight.length,
-                0,
-            );
-            if (flat.length !== expected) {
-                throw new Error(
-                    `Weights length mismatch: got ${flat.length} floats, model expects ${expected}`,
-                );
-            }
+            const flat = normalizeWeights(weightsOrArray, this.parameterCount);
             let offset = 0;
             for (const p of this.parameters) {
                 p.weight.set(flat.subarray(offset, offset + p.weight.length));

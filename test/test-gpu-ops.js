@@ -1,7 +1,7 @@
 import { Matrix2D } from "../modules/matrix.js";
 import { initWebGPU } from "../modules/gpu/context.js";
 import { createStorageBuffer, readFromBuffer } from "../modules/gpu/buffer.js";
-import GPUOps from "../modules/gpu/ops.js";
+import TrainingGPUOps from "../modules/gpu/training-ops.js";
 
 console.log("=== WebGPU Compute Pipeline Verification (Phase 2) ===\n");
 
@@ -12,7 +12,7 @@ console.log(
         adapter.info.description || "Generic Adapter"
     }`,
 );
-const gpuOps = GPUOps.from(device);
+const gpuOps = TrainingGPUOps.from(device);
 
 // Helper to check numerical equivalence
 function assertClose(actual, expected, tolerance = 1e-4, testName = "Test") {

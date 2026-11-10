@@ -121,44 +121,6 @@ export default class RNN {
     }
 
     /**
-     * Synchronize weights from a trained CPU RecurrentNetwork
-     */
-    syncFromCpuNetwork(cpuNet) {
-        // 1. Priming weights
-        if (this.priming && cpuNet.priming) {
-            this.priming.cpuW.set(cpuNet.priming.W.data);
-            this.priming.cpuB.set(cpuNet.priming.b);
-            uploadToBuffer(
-                this.device,
-                this.priming.bufW,
-                cpuNet.priming.W.data,
-            );
-            uploadToBuffer(this.device, this.priming.bufB, cpuNet.priming.b);
-        }
-
-        // 2. Recurrent layer weights
-        for (let l = 0; l < this.layers.length; l++) {
-            this.layers[l].syncFromCpuLayer(cpuNet.layers[l]);
-        }
-
-        // 3. Head weights
-        for (let h = 0; h < this.heads.length; h++) {
-            const gpuHead = this.heads[h];
-            const cpuHead = cpuNet.heads[h];
-
-            uploadToBuffer(this.device, gpuHead.bufW, cpuHead.W.data);
-
-            const combinedB = new Float32Array(cpuHead.b);
-            if (gpuHead.priorBias) {
-                for (let i = 0; i < combinedB.length; i++) {
-                    combinedB[i] += gpuHead.priorBias[i];
-                }
-            }
-            uploadToBuffer(this.device, gpuHead.bufB, combinedB);
-        }
-    }
-
-    /**
      * Total number of float parameters expected by this network architecture.
      */
     get parameterCount() {
@@ -365,8 +327,8 @@ export default class RNN {
     async predict(X, T, options = {}) {
         const bufX = createStorageBuffer(this.device, X, "gpu_predict_X");
         const gpuResults = this.forward(bufX, T, options);
-
         const outputs = {};
+
         for (const head of this.heads) {
             const outDim = head.outDim;
             const probs = await readFromBuffer(

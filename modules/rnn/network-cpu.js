@@ -124,53 +124,9 @@ export default class RecurrentNetwork {
         }
 
         for (let l = 0; l < this.layers.length; l++) {
-            const layer = this.layers[l];
             this.parameters.push(
-                {
-                    name: `layer${l}_Wih_fwd`,
-                    weight: layer.cellFwd.W_ih.data,
-                    grad: layer.cellFwd.grad_W_ih.data,
-                },
-                {
-                    name: `layer${l}_Whh_fwd`,
-                    weight: layer.cellFwd.W_hh.data,
-                    grad: layer.cellFwd.grad_W_hh.data,
-                },
-                {
-                    name: `layer${l}_bih_fwd`,
-                    weight: layer.cellFwd.b_ih,
-                    grad: layer.cellFwd.grad_b_ih,
-                },
-                {
-                    name: `layer${l}_bhh_fwd`,
-                    weight: layer.cellFwd.b_hh,
-                    grad: layer.cellFwd.grad_b_hh,
-                },
+                ...this.layers[l].getParameters(`layer${l}`),
             );
-            if (layer.bidirectional && layer.cellBwd) {
-                this.parameters.push(
-                    {
-                        name: `layer${l}_Wih_bwd`,
-                        weight: layer.cellBwd.W_ih.data,
-                        grad: layer.cellBwd.grad_W_ih.data,
-                    },
-                    {
-                        name: `layer${l}_Whh_bwd`,
-                        weight: layer.cellBwd.W_hh.data,
-                        grad: layer.cellBwd.grad_W_hh.data,
-                    },
-                    {
-                        name: `layer${l}_bih_bwd`,
-                        weight: layer.cellBwd.b_ih,
-                        grad: layer.cellBwd.grad_b_ih,
-                    },
-                    {
-                        name: `layer${l}_bhh_bwd`,
-                        weight: layer.cellBwd.b_hh,
-                        grad: layer.cellBwd.grad_b_hh,
-                    },
-                );
-            }
         }
 
         for (const head of this.heads) {

@@ -2,6 +2,7 @@ import { initWebGPU } from "../modules/gpu/context.js";
 import { GpuBidirectionalGru } from "../modules/rnn/gpu-bigru.js";
 import { createStorageBuffer, readFromBuffer } from "../modules/gpu/buffer.js";
 import { BidirectionalGru } from "../modules/rnn/bigru.js";
+import { extractWeightsArray } from "../modules/serialize.js";
 import RNN from "../modules/rnn.js";
 import RecurrentNetwork from "../modules/rnn/network-cpu.js";
 
@@ -52,7 +53,7 @@ const H = 48;
 
 const cpuBigru = new BidirectionalGru(inDim, H);
 const gpuBigru = new GpuBidirectionalGru(device, inDim, H, true);
-gpuBigru.syncFromCpuLayer(cpuBigru);
+gpuBigru.loadWeights(extractWeightsArray(cpuBigru));
 
 const X = new Float32Array(T * inDim);
 for (let i = 0; i < X.length; i++) X[i] = (Math.random() - 0.5) * 2;
@@ -75,7 +76,7 @@ assertClose(gpuOutH, cpuOutH, 1e-4, `BiGRU [T=${T}, Din=${inDim}, H=${H}]`);
 console.log("\n3. Verifying Unidirectional GRU Mode on GPU...");
 const cpuUniGru = new BidirectionalGru(inDim, H, false);
 const gpuUniGru = new GpuBidirectionalGru(device, inDim, H, false);
-gpuUniGru.syncFromCpuLayer(cpuUniGru);
+gpuUniGru.loadWeights(extractWeightsArray(cpuUniGru));
 
 const cpuUniOut = cpuUniGru.forward(X, T, h0);
 const bufUniOut = gpuUniGru.forward(bufX, T, bufH0);
@@ -110,8 +111,7 @@ const rnnDefinition = {
 };
 
 const cpuNet = new RecurrentNetwork(rnnDefinition);
-const gpuNet = new RNN(device, rnnDefinition);
-gpuNet.syncFromCpuNetwork(cpuNet);
+const gpuNet = new RNN(device, rnnDefinition, extractWeightsArray(cpuNet));
 
 const seqT = 5;
 const seqX = new Float32Array(seqT * rnnDefinition.inDim);

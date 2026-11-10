@@ -1,6 +1,6 @@
 import { Matrix2D } from "../matrix.js";
 import { createStorageBuffer } from "../gpu/buffer.js";
-import GPUOps from "../gpu/ops.js";
+import TrainingGPUOps from "../gpu/training-ops.js";
 
 /**
  * GPU Dense (Fully Connected) Layer
@@ -8,7 +8,7 @@ import GPUOps from "../gpu/ops.js";
 export class GpuDenseLayer {
     constructor(device, inDim, outDim) {
         this.device = device;
-        this.gpuOps = GPUOps.from(device);
+        this.gpuOps = TrainingGPUOps.from(device);
         this.inDim = inDim;
         this.outDim = outDim;
 
@@ -130,7 +130,7 @@ export class GpuDenseLayer {
 export class GpuReLULayer {
     constructor(device) {
         this.device = device;
-        this.gpuOps = GPUOps.from(device);
+        this.gpuOps = TrainingGPUOps.from(device);
         this.cachedInput = null;
         this._buffers = new Map();
     }
@@ -178,7 +178,7 @@ export class GpuReLULayer {
 export class GpuSoftmaxCrossEntropy {
     constructor(device) {
         this.device = device;
-        this.gpuOps = GPUOps.from(device);
+        this.gpuOps = TrainingGPUOps.from(device);
         this._buffers = new Map();
     }
 
@@ -226,7 +226,7 @@ export class GpuSoftmaxCrossEntropy {
 export class GpuAdam {
     constructor(device, lr = 0.05, beta1 = 0.9, beta2 = 0.999, eps = 1e-8) {
         this.device = device;
-        this.gpuOps = GPUOps.from(device);
+        this.gpuOps = TrainingGPUOps.from(device);
         this.lr = lr;
         this.beta1 = beta1;
         this.beta2 = beta2;
@@ -280,7 +280,7 @@ export class GpuAdam {
 export class GpuSequentialNetwork {
     constructor(device, layers = []) {
         this.device = device;
-        this.gpuOps = GPUOps.from(device);
+        this.gpuOps = TrainingGPUOps.from(device);
         this.layers = layers;
     }
 

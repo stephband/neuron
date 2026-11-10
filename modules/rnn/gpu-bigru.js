@@ -78,29 +78,61 @@ export class GpuBidirectionalGru {
     }
 
     /**
-     * Upload weights from flat Float32Array slice or weight dictionary
+     * Upload weights from a flat Float32Array or ArrayBuffer slice
      *
-     * @param {Float32Array|Object} weights - Flat weights or dictionary
-     * @param {number} [offset=0] - Starting float offset if flat array
+     * @param {Float32Array|ArrayBuffer} weights - Flat weights
+     * @param {number} [offset=0] - Starting float offset
      * @returns {number} Number of floats consumed
      */
     loadWeights(weights, offset = 0) {
         const queue = this.device.queue;
+        const flat = weights instanceof Float32Array
+            ? weights
+            : new Float32Array(weights);
+        const H = this.hiddenDim;
+        const inDim = this.inDim;
 
-        if (weights instanceof Float32Array || weights instanceof ArrayBuffer) {
-            const flat = weights instanceof Float32Array
-                ? weights
-                : new Float32Array(weights);
-            const H = this.hiddenDim;
-            const inDim = this.inDim;
+        const size_Wih = 3 * H * inDim;
+        const size_Whh = 3 * H * H;
+        const size_b = 3 * H;
 
-            const size_Wih = 3 * H * inDim;
-            const size_Whh = 3 * H * H;
-            const size_b = 3 * H;
+        let cur = offset;
+        queue.writeBuffer(
+            this.bufW_ih_fwd,
+            0,
+            flat.buffer,
+            flat.byteOffset + cur * 4,
+            size_Wih * 4,
+        );
+        cur += size_Wih;
+        queue.writeBuffer(
+            this.bufW_hh_fwd,
+            0,
+            flat.buffer,
+            flat.byteOffset + cur * 4,
+            size_Whh * 4,
+        );
+        cur += size_Whh;
+        queue.writeBuffer(
+            this.bufB_ih_fwd,
+            0,
+            flat.buffer,
+            flat.byteOffset + cur * 4,
+            size_b * 4,
+        );
+        cur += size_b;
+        queue.writeBuffer(
+            this.bufB_hh_fwd,
+            0,
+            flat.buffer,
+            flat.byteOffset + cur * 4,
+            size_b * 4,
+        );
+        cur += size_b;
 
-            let cur = offset;
+        if (this.bidirectional) {
             queue.writeBuffer(
-                this.bufW_ih_fwd,
+                this.bufW_ih_bwd,
                 0,
                 flat.buffer,
                 flat.byteOffset + cur * 4,
@@ -108,7 +140,7 @@ export class GpuBidirectionalGru {
             );
             cur += size_Wih;
             queue.writeBuffer(
-                this.bufW_hh_fwd,
+                this.bufW_hh_bwd,
                 0,
                 flat.buffer,
                 flat.byteOffset + cur * 4,
@@ -116,166 +148,24 @@ export class GpuBidirectionalGru {
             );
             cur += size_Whh;
             queue.writeBuffer(
-                this.bufB_ih_fwd,
-                0,
-                flat.buffer,
-                flat.byteOffset + cur * 4,
-                size_b * 4,
-            );
-            cur += size_b;
-            queue.writeBuffer(
-                this.bufB_hh_fwd,
-                0,
-                flat.buffer,
-                flat.byteOffset + cur * 4,
-                size_b * 4,
-            );
-            cur += size_b;
-
-            if (this.bidirectional) {
-                queue.writeBuffer(
-                    this.bufW_ih_bwd,
-                    0,
-                    flat.buffer,
-                    flat.byteOffset + cur * 4,
-                    size_Wih * 4,
-                );
-                cur += size_Wih;
-                queue.writeBuffer(
-                    this.bufW_hh_bwd,
-                    0,
-                    flat.buffer,
-                    flat.byteOffset + cur * 4,
-                    size_Whh * 4,
-                );
-                cur += size_Whh;
-                queue.writeBuffer(
-                    this.bufB_ih_bwd,
-                    0,
-                    flat.buffer,
-                    flat.byteOffset + cur * 4,
-                    size_b * 4,
-                );
-                cur += size_b;
-                queue.writeBuffer(
-                    this.bufB_hh_bwd,
-                    0,
-                    flat.buffer,
-                    flat.byteOffset + cur * 4,
-                    size_b * 4,
-                );
-                cur += size_b;
-            }
-
-            return cur - offset;
-        }
-
-        const wih_fwd = weights.Wih_fwd instanceof Float32Array
-            ? weights.Wih_fwd
-            : new Float32Array(weights.Wih_fwd);
-        const bih_fwd = weights.bih_fwd instanceof Float32Array
-            ? weights.bih_fwd
-            : new Float32Array(weights.bih_fwd);
-        const whh_fwd = weights.Whh_fwd instanceof Float32Array
-            ? weights.Whh_fwd
-            : new Float32Array(weights.Whh_fwd);
-        const bhh_fwd = weights.bhh_fwd instanceof Float32Array
-            ? weights.bhh_fwd
-            : new Float32Array(weights.bhh_fwd);
-
-        queue.writeBuffer(
-            this.bufW_ih_fwd,
-            0,
-            wih_fwd.buffer,
-            wih_fwd.byteOffset,
-            wih_fwd.byteLength,
-        );
-        queue.writeBuffer(
-            this.bufB_ih_fwd,
-            0,
-            bih_fwd.buffer,
-            bih_fwd.byteOffset,
-            bih_fwd.byteLength,
-        );
-        queue.writeBuffer(
-            this.bufW_hh_fwd,
-            0,
-            whh_fwd.buffer,
-            whh_fwd.byteOffset,
-            whh_fwd.byteLength,
-        );
-        queue.writeBuffer(
-            this.bufB_hh_fwd,
-            0,
-            bhh_fwd.buffer,
-            bhh_fwd.byteOffset,
-            bhh_fwd.byteLength,
-        );
-
-        if (this.bidirectional && weights.Wih_bwd) {
-            const wih_bwd = weights.Wih_bwd instanceof Float32Array
-                ? weights.Wih_bwd
-                : new Float32Array(weights.Wih_bwd);
-            const bih_bwd = weights.bih_bwd instanceof Float32Array
-                ? weights.bih_bwd
-                : new Float32Array(weights.bih_bwd);
-            const whh_bwd = weights.Whh_bwd instanceof Float32Array
-                ? weights.Whh_bwd
-                : new Float32Array(weights.Whh_bwd);
-            const bhh_bwd = weights.bhh_bwd instanceof Float32Array
-                ? weights.bhh_bwd
-                : new Float32Array(weights.bhh_bwd);
-
-            queue.writeBuffer(
-                this.bufW_ih_bwd,
-                0,
-                wih_bwd.buffer,
-                wih_bwd.byteOffset,
-                wih_bwd.byteLength,
-            );
-            queue.writeBuffer(
                 this.bufB_ih_bwd,
                 0,
-                bih_bwd.buffer,
-                bih_bwd.byteOffset,
-                bih_bwd.byteLength,
+                flat.buffer,
+                flat.byteOffset + cur * 4,
+                size_b * 4,
             );
-            queue.writeBuffer(
-                this.bufW_hh_bwd,
-                0,
-                whh_bwd.buffer,
-                whh_bwd.byteOffset,
-                whh_bwd.byteLength,
-            );
+            cur += size_b;
             queue.writeBuffer(
                 this.bufB_hh_bwd,
                 0,
-                bhh_bwd.buffer,
-                bhh_bwd.byteOffset,
-                bhh_bwd.byteLength,
+                flat.buffer,
+                flat.byteOffset + cur * 4,
+                size_b * 4,
             );
+            cur += size_b;
         }
 
-        return this.parameterCount;
-    }
-
-    /**
-     * Sync from CPU BidirectionalGru layer instance
-     */
-    syncFromCpuLayer(cpuLayer) {
-        const weights = {
-            Wih_fwd: cpuLayer.cellFwd.W_ih.data,
-            bih_fwd: cpuLayer.cellFwd.b_ih,
-            Whh_fwd: cpuLayer.cellFwd.W_hh.data,
-            bhh_fwd: cpuLayer.cellFwd.b_hh,
-        };
-        if (this.bidirectional && cpuLayer.cellBwd) {
-            weights.Wih_bwd = cpuLayer.cellBwd.W_ih.data;
-            weights.bih_bwd = cpuLayer.cellBwd.b_ih;
-            weights.Whh_bwd = cpuLayer.cellBwd.W_hh.data;
-            weights.bhh_bwd = cpuLayer.cellBwd.b_hh;
-        }
-        this.loadWeights(weights);
+        return cur - offset;
     }
 
     /**

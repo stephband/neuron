@@ -1,6 +1,5 @@
 import { initWebGPU } from "../modules/gpu/context.js";
 import { createStorageBuffer, readFromBuffer } from "../modules/gpu/buffer.js";
-import GPUOps from "../modules/gpu/ops.js";
 import {
     GpuAdam,
     GpuDenseLayer,

@@ -4,7 +4,6 @@ import {
     readFromBuffer,
     uploadToBuffer,
 } from "../gpu/buffer.js";
-import GPUOps from "../gpu/ops.js";
 import {
     GpuAdam,
     GpuDenseLayer,

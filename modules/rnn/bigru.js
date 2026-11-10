@@ -35,6 +35,61 @@ export class BidirectionalGru {
     }
   }
 
+  getParameters(prefix = "") {
+    const p = prefix ? `${prefix}_` : "";
+    const params = [
+      {
+        name: `${p}Wih_fwd`,
+        weight: this.cellFwd.W_ih.data,
+        grad: this.cellFwd.grad_W_ih.data,
+      },
+      {
+        name: `${p}Whh_fwd`,
+        weight: this.cellFwd.W_hh.data,
+        grad: this.cellFwd.grad_W_hh.data,
+      },
+      {
+        name: `${p}bih_fwd`,
+        weight: this.cellFwd.b_ih,
+        grad: this.cellFwd.grad_b_ih,
+      },
+      {
+        name: `${p}bhh_fwd`,
+        weight: this.cellFwd.b_hh,
+        grad: this.cellFwd.grad_b_hh,
+      },
+    ];
+    if (this.bidirectional && this.cellBwd) {
+      params.push(
+        {
+          name: `${p}Wih_bwd`,
+          weight: this.cellBwd.W_ih.data,
+          grad: this.cellBwd.grad_W_ih.data,
+        },
+        {
+          name: `${p}Whh_bwd`,
+          weight: this.cellBwd.W_hh.data,
+          grad: this.cellBwd.grad_W_hh.data,
+        },
+        {
+          name: `${p}bih_bwd`,
+          weight: this.cellBwd.b_ih,
+          grad: this.cellBwd.grad_b_ih,
+        },
+        {
+          name: `${p}bhh_bwd`,
+          weight: this.cellBwd.b_hh,
+          grad: this.cellBwd.grad_b_hh,
+        },
+      );
+    }
+    return params;
+  }
+
+  get parameters() {
+    return this.getParameters();
+  }
+
   /**
    * Forward pass across sequence of length T
    * 

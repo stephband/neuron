@@ -1,10 +1,10 @@
 import {
     createStorageBuffer,
-    readFromBuffer,
     uploadToBuffer,
 } from "../gpu/buffer.js";
 import GPUOps from "../gpu/ops.js";
 import { normalizeWeights } from "../deserialize.js";
+import { resolveHeadMeta, resolveLayerConcat } from "./concat.js";
 import { GpuBidirectionalGru } from "./gpu-bigru.js";
 
 /**
@@ -37,22 +37,34 @@ export default class RNN {
         this.headConfigs = heads;
 
         // 1. Recurrent Layers
+        const headMetaByName = resolveHeadMeta(heads, layers.length);
         this.layers = [];
-        let currentInDim = inDim;
+        this.layerConcatSources = [];
+
         for (let l = 0; l < layers.length; l++) {
             const cfg = layers[l];
+            const baseInDim = l === 0 ? inDim : this.layers[l - 1].outDim;
+            const concatSources = resolveLayerConcat(
+                cfg.concat,
+                l,
+                inDim,
+                headMetaByName,
+            );
+            this.layerConcatSources.push(concatSources);
+
+            const layerInDim = baseInDim +
+                concatSources.reduce((sum, src) => sum + src.dim, 0);
             const hDim = cfg.hiddenDim || 48;
             const bidi = cfg.bidirectional !== undefined
                 ? cfg.bidirectional
                 : true;
             const layer = new GpuBidirectionalGru(
                 device,
-                currentInDim,
+                layerInDim,
                 hDim,
                 bidi,
             );
             this.layers.push(layer);
-            currentInDim = layer.outDim;
         }
 
         // 2. Priming Projection
@@ -69,10 +81,13 @@ export default class RNN {
                     "gpu_priming_W",
                 ),
                 bufB: createStorageBuffer(device, H0 * 4, "gpu_priming_b"),
+                bufH0: createStorageBuffer(device, H0 * 4, "gpu_priming_h0"),
+                h0Cpu: new Float32Array(H0),
                 cpuW: new Float32Array(H0 * pDim),
                 cpuB: new Float32Array(H0),
             };
         }
+        this.bufCustomH0 = null;
 
         // 3. Output Heads
         this.heads = [];
@@ -112,12 +127,105 @@ export default class RNN {
                     biasWithPrior,
                     `gpu_head_${name}_b`,
                 ),
+                bufLogits: null,
+                bufProbs: null,
             });
         }
+
+        // Reusable sequence scratch buffers (sized for capT)
+        this.capT = 0;
+        this.bufPredictX = null;
+        this.layerConcatBufs = new Array(this.layers.length).fill(null);
+        this.stagingBuffer = null;
+        this._predictQueue = Promise.resolve();
 
         if (weights) {
             this.loadWeights(weights);
         }
+    }
+
+    /**
+     * Ensures reusable sequence buffers (inputs, concat, head logits/probs, readback staging)
+     * are allocated for at least T timesteps.
+     */
+    ensureScratchBuffers(T) {
+        if (T <= this.capT) return;
+        if (this.bufPredictX) this.bufPredictX.destroy();
+        for (let l = 0; l < this.layerConcatBufs.length; l++) {
+            if (this.layerConcatBufs[l]) this.layerConcatBufs[l].destroy();
+        }
+        for (const head of this.heads) {
+            if (head.bufLogits) head.bufLogits.destroy();
+            if (head.bufProbs) head.bufProbs.destroy();
+        }
+        if (this.stagingBuffer) this.stagingBuffer.destroy();
+
+        this.capT = T;
+        this.bufPredictX = createStorageBuffer(
+            this.device,
+            T * this.inDim * 4,
+            "gpu_predict_X",
+        );
+
+        for (let l = 0; l < this.layers.length; l++) {
+            if (this.layerConcatSources[l].length) {
+                this.layerConcatBufs[l] = createStorageBuffer(
+                    this.device,
+                    T * this.layers[l].inDim * 4,
+                    `gpu_layer_${l}_concat_in`,
+                );
+            }
+        }
+
+        let totalHeadOutFloats = 0;
+        for (const head of this.heads) {
+            const bytes = T * head.outDim * 4;
+            head.bufLogits = createStorageBuffer(
+                this.device,
+                bytes,
+                `head_${head.name}_logits`,
+            );
+            head.bufProbs = createStorageBuffer(
+                this.device,
+                bytes,
+                `head_${head.name}_probs`,
+            );
+            totalHeadOutFloats += T * head.outDim;
+        }
+
+        const stagingBytes = Math.max(16, (totalHeadOutFloats * 4 + 3) & ~3);
+        this.stagingBuffer = this.device.createBuffer({
+            label: "gpu_predict_staging",
+            size: stagingBytes,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+    }
+
+    /**
+     * Releases all GPU buffers owned by this network.
+     */
+    destroy() {
+        for (const layer of this.layers) {
+            layer.destroy();
+        }
+        if (this.priming) {
+            this.priming.bufW.destroy();
+            this.priming.bufB.destroy();
+            this.priming.bufH0.destroy();
+        }
+        if (this.bufCustomH0) this.bufCustomH0.destroy();
+        for (const head of this.heads) {
+            head.bufW.destroy();
+            head.bufB.destroy();
+            if (head.bufLogits) head.bufLogits.destroy();
+            if (head.bufProbs) head.bufProbs.destroy();
+        }
+        if (this.bufPredictX) this.bufPredictX.destroy();
+        for (const buf of this.layerConcatBufs) {
+            if (buf) buf.destroy();
+        }
+        if (this.stagingBuffer) this.stagingBuffer.destroy();
+        this.capT = 0;
     }
 
     /**
@@ -201,19 +309,27 @@ export default class RNN {
         const cmdEncoder = encoder ||
             this.device.createCommandEncoder({ label: "gpu_net_forward" });
 
+        this.ensureScratchBuffers(T);
+
         // 1. Resolve Priming State h0 on GPU
         let bufH0 = null;
         if (options.condition !== undefined && this.priming) {
             const H0 = this.layers[0].hiddenDim;
-            const h0_cpu = new Float32Array(H0);
+            const h0_cpu = this.priming.h0Cpu;
             const wData = this.priming.cpuW;
             const bData = this.priming.cpuB;
             const pDim = this.priming.inDim;
 
             if (this.priming.type === "categorical") {
-                const c = options.condition;
-                for (let j = 0; j < H0; j++) {
-                    h0_cpu[j] = Math.tanh(wData[j * pDim + c] + bData[j]);
+                const c = Number(options.condition);
+                if (c >= 0 && c < pDim) {
+                    for (let j = 0; j < H0; j++) {
+                        h0_cpu[j] = Math.tanh(wData[j * pDim + c] + bData[j]);
+                    }
+                } else {
+                    for (let j = 0; j < H0; j++) {
+                        h0_cpu[j] = Math.tanh(bData[j]);
+                    }
                 }
             } else {
                 const v = options.condition;
@@ -225,88 +341,107 @@ export default class RNN {
                     h0_cpu[j] = Math.tanh(sum);
                 }
             }
-            bufH0 = createStorageBuffer(this.device, h0_cpu, "gpu_priming_h0");
+            uploadToBuffer(this.device, this.priming.bufH0, h0_cpu);
+            bufH0 = this.priming.bufH0;
         } else if (options.bufH0) {
             bufH0 = options.bufH0;
         } else if (options.h0 instanceof Float32Array) {
-            bufH0 = createStorageBuffer(this.device, options.h0, "gpu_h0");
+            if (!this.bufCustomH0) {
+                this.bufCustomH0 = createStorageBuffer(
+                    this.device,
+                    this.layers[0].hiddenDim * 4,
+                    "gpu_h0",
+                );
+            }
+            uploadToBuffer(this.device, this.bufCustomH0, options.h0);
+            bufH0 = this.bufCustomH0;
         }
 
-        // 2. Propagate through recurrent layers
+        // 2. Propagate through recurrent layers and interleaved output heads
         const layerOutputs = [];
-        let currentBuf = bufX;
+        const results = {};
 
         for (let l = 0; l < this.layers.length; l++) {
+            const layer = this.layers[l];
             const layerH0 = (l === 0) ? bufH0 : null;
-            const bufH_l = this.layers[l].forward(
-                currentBuf,
+            const baseBuf = l === 0 ? bufX : layerOutputs[l - 1];
+            const baseDim = l === 0 ? this.inDim : this.layers[l - 1].outDim;
+            const concatSources = this.layerConcatSources[l];
+
+            let layerInBuf = baseBuf;
+            if (concatSources.length) {
+                layerInBuf = this.layerConcatBufs[l];
+                this.gpuOps.dispatchCopyCols(
+                    baseBuf,
+                    layerInBuf,
+                    T,
+                    baseDim,
+                    layer.inDim,
+                    0,
+                    cmdEncoder,
+                );
+                let colOffset = baseDim;
+                for (const src of concatSources) {
+                    const srcBuf = src.type === "input"
+                        ? bufX
+                        : results[src.name].bufProbs;
+                    this.gpuOps.dispatchCopyCols(
+                        srcBuf,
+                        layerInBuf,
+                        T,
+                        src.dim,
+                        layer.inDim,
+                        colOffset,
+                        cmdEncoder,
+                    );
+                    colOffset += src.dim;
+                }
+            }
+
+            const bufH_l = layer.forward(
+                layerInBuf,
                 T,
                 layerH0,
                 cmdEncoder,
             );
             layerOutputs.push(bufH_l);
-            currentBuf = bufH_l;
-        }
 
-        // 3. Compute Head Projections on GPU
-        const results = {};
+            for (const head of this.heads) {
+                if (head.layerIndex !== l) continue;
 
-        for (const head of this.heads) {
-            const bufH_source = layerOutputs[head.layerIndex];
-            const inDimHead = head.layerOutDim;
-            const outDim = head.outDim;
+                const inDimHead = head.layerOutDim;
+                const outDim = head.outDim;
+                const bufLogits = head.bufLogits;
+                const bufProbs = head.bufProbs;
 
-            const bufZ_mat = createStorageBuffer(
-                this.device,
-                T * outDim * 4,
-                `temp_head_${head.name}_Zmat`,
-            );
-            const bufLogits = createStorageBuffer(
-                this.device,
-                T * outDim * 4,
-                `head_${head.name}_logits`,
-            );
+                // Fused GEMM + Bias: Logits = H_source * W_head^T + b_head (+ prior)
+                this.gpuOps.dispatchMatmul(
+                    bufH_l,
+                    head.bufW,
+                    bufLogits,
+                    T,
+                    outDim,
+                    inDimHead,
+                    false,
+                    true,
+                    cmdEncoder,
+                    head.bufB,
+                );
 
-            // GEMM: Z_mat = H_source * W_head^T
-            this.gpuOps.dispatchMatmul(
-                bufH_source,
-                head.bufW,
-                bufZ_mat,
-                T,
-                outDim,
-                inDimHead,
-                false,
-                true,
-                cmdEncoder,
-            );
-            // Bias addition: Logits = Z_mat + b_head (+ prior)
-            this.gpuOps.dispatchAddBias(
-                bufZ_mat,
-                head.bufB,
-                bufLogits,
-                T,
-                outDim,
-                cmdEncoder,
-            );
+                // Softmax on GPU
+                this.gpuOps.dispatchSoftmax(
+                    bufLogits,
+                    bufProbs,
+                    T,
+                    outDim,
+                    cmdEncoder,
+                );
 
-            // Softmax on GPU
-            const bufProbs = createStorageBuffer(
-                this.device,
-                T * outDim * 4,
-                `head_${head.name}_probs`,
-            );
-            this.gpuOps.dispatchSoftmax(
-                bufLogits,
-                bufProbs,
-                T,
-                outDim,
-                cmdEncoder,
-            );
-
-            results[head.name] = {
-                bufLogits,
-                bufProbs,
-            };
+                results[head.name] = {
+                    bufLogits,
+                    bufProbs,
+                };
+            }
         }
 
         if (isLocalEncoder) {
@@ -318,24 +453,69 @@ export default class RNN {
 
     /**
      * Complete inference: runs forward pass on GPU and reads back predictions
+     * in a single command submission and a single staging buffer map.
      *
      * @param {Float32Array} X - Input features [T x inDim]
      * @param {number} T - Sequence length
      * @param {Object} options - Options (e.g. condition, h0)
      * @returns {Promise<Object>} Readback probabilities and argmax class predictions
      */
-    async predict(X, T, options = {}) {
-        const bufX = createStorageBuffer(this.device, X, "gpu_predict_X");
-        const gpuResults = this.forward(bufX, T, options);
-        const outputs = {};
+    predict(X, T, options = {}) {
+        const next = this._predictQueue.then(() =>
+            this._predictNow(X, T, options)
+        );
+        this._predictQueue = next.catch(() => {});
+        return next;
+    }
 
+    async _predictNow(X, T, options = {}) {
+        this.ensureScratchBuffers(T);
+        const inputData = X instanceof Float32Array ? X : new Float32Array(X);
+        this.device.queue.writeBuffer(
+            this.bufPredictX,
+            0,
+            inputData.buffer,
+            inputData.byteOffset,
+            T * this.inDim * 4,
+        );
+
+        const cmdEncoder = this.device.createCommandEncoder({
+            label: "gpu_predict_encoder",
+        });
+        const gpuResults = this.forward(
+            this.bufPredictX,
+            T,
+            options,
+            cmdEncoder,
+        );
+
+        let byteOffset = 0;
+        for (const head of this.heads) {
+            const byteLen = T * head.outDim * 4;
+            cmdEncoder.copyBufferToBuffer(
+                gpuResults[head.name].bufProbs,
+                0,
+                this.stagingBuffer,
+                byteOffset,
+                byteLen,
+            );
+            byteOffset += byteLen;
+        }
+
+        this.device.queue.submit([cmdEncoder.finish()]);
+
+        await this.stagingBuffer.mapAsync(GPUMapMode.READ, 0, byteOffset);
+        const mappedRange = this.stagingBuffer.getMappedRange(0, byteOffset);
+        const allProbs = new Float32Array(mappedRange.slice(0));
+        this.stagingBuffer.unmap();
+
+        const outputs = {};
+        let floatOffset = 0;
         for (const head of this.heads) {
             const outDim = head.outDim;
-            const probs = await readFromBuffer(
-                this.device,
-                gpuResults[head.name].bufProbs,
-                T * outDim * 4,
-            );
+            const len = T * outDim;
+            const probs = allProbs.subarray(floatOffset, floatOffset + len);
+            floatOffset += len;
 
             const preds = new Uint32Array(T);
             for (let t = 0; t < T; t++) {

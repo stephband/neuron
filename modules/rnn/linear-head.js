@@ -105,7 +105,7 @@ export default class LinearHead {
         const outD = this.outDim;
         const inD = this.inDim;
 
-        // 1. gradW += gradLogits^T * H; gradB += sum(gradLogits)
+        // Single-pass fused gradW, gradB, and dH accumulation
         for (let t = 0; t < T; t++) {
             const lOffset = t * outD;
             const hOffset = t * inD;
@@ -115,18 +115,6 @@ export default class LinearHead {
                 const wOffset = c * inD;
                 for (let j = 0; j < inD; j++) {
                     gradW_data[wOffset + j] += dL * H_data[hOffset + j];
-                }
-            }
-        }
-
-        // 2. dH += gradLogits * W
-        for (let t = 0; t < T; t++) {
-            const lOffset = t * outD;
-            const hOffset = t * inD;
-            for (let c = 0; c < outD; c++) {
-                const dL = gradLogits[lOffset + c];
-                const wOffset = c * inD;
-                for (let j = 0; j < inD; j++) {
                     dH_data[hOffset + j] += dL * W_data[wOffset + j];
                 }
             }

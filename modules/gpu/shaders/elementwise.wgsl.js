@@ -127,3 +127,29 @@ fn main(
   }
 }
 `;
+
+export const COPY_COLS_WGSL = /* wgsl */ `
+struct CopyColsDims {
+  rows: u32,
+  srcCols: u32,
+  dstCols: u32,
+  dstColOffset: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: CopyColsDims;
+@group(0) @binding(1) var<storage, read> src: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+
+// Copies src [rows x srcCols] into dst [rows x dstCols] starting at dstColOffset
+@compute @workgroup_size(16, 16)
+fn main(
+  @builtin(global_invocation_id) global_id: vec3<u32>
+) {
+  let col = global_id.x;
+  let row = global_id.y;
+
+  if (row < dims.rows && col < dims.srcCols) {
+    dst[row * dims.dstCols + dims.dstColOffset + col] = src[row * dims.srcCols + col];
+  }
+}
+`;

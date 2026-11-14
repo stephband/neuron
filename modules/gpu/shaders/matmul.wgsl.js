@@ -17,7 +17,7 @@ struct GemmParams {
   K: u32,             // Shared inner dimension
   transposeA: u32,    // 0 = Normal, 1 = Transpose A
   transposeB: u32,    // 0 = Normal, 1 = Transpose B
-  _pad: u32,
+  hasBias: u32,       // 0 = No bias, 1 = Add bias[col]
   _pad2: u32,
   _pad3: u32,
 };
@@ -26,6 +26,7 @@ struct GemmParams {
 @group(0) @binding(1) var<storage, read> matrixA: array<f32>;
 @group(0) @binding(2) var<storage, read> matrixB: array<f32>;
 @group(0) @binding(3) var<storage, read_write> matrixC: array<f32>;
+@group(0) @binding(4) var<storage, read> bias: array<f32>;
 
 const TILE_SIZE: u32 = 16u;
 
@@ -97,9 +98,13 @@ fn matmul_tiled(
     workgroupBarrier();
   }
 
-  // 4. Write result to output matrix C
+  // 4. Write result to output matrix C (with optional fused broadcast bias)
   if (row < params.M && col < params.N) {
-    matrixC[row * params.N + col] = acc;
+    var outVal: f32 = acc;
+    if (params.hasBias == 1u) {
+      outVal = outVal + bias[col];
+    }
+    matrixC[row * params.N + col] = outVal;
   }
 }
 `;

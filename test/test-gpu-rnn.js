@@ -152,6 +152,44 @@ for (let t = 0; t < seqT; t++) {
 }
 console.log("   ✓ All head predictions match 100% between CPU and GPU!");
 
+// 5. Verify Layer Input Concatenation (head probs + raw input) on GPU vs CPU
+console.log(
+    "\n5. Verifying Layer Concatenation (head probs + raw input) GPU vs CPU...",
+);
+
+const concatDef = {
+    inDim: 10,
+    layers: [
+        { hiddenDim: 8, bidirectional: true },
+        { hiddenDim: 6, bidirectional: true, concat: ["head_alpha", "input"] },
+    ],
+    heads: [
+        { name: "head_alpha", layerIndex: 0, outDim: 7 },
+        { name: "head_beta", layerIndex: 1, outDim: 5 },
+    ],
+};
+
+const cpuConcatNet = new RecurrentNetwork(concatDef);
+const gpuConcatNet = new RNN(device, concatDef, extractWeightsArray(cpuConcatNet));
+const concatX = new Float32Array(seqT * concatDef.inDim);
+for (let i = 0; i < concatX.length; i++) concatX[i] = (Math.random() - 0.5) * 2;
+
+const cpuConcatOut = cpuConcatNet.forward(concatX, seqT);
+const gpuConcatOut = await gpuConcatNet.predict(concatX, seqT);
+
+assertClose(
+    gpuConcatOut.head_alpha.probs,
+    cpuConcatOut.head_alpha.probs,
+    1e-4,
+    "Concat Head Alpha Probs",
+);
+assertClose(
+    gpuConcatOut.head_beta.probs,
+    cpuConcatOut.head_beta.probs,
+    1e-4,
+    "Concat Head Beta Probs",
+);
+
 console.log(
     "\nAll WebGPU WGSL recurrent kernels and GPU networks verified with 100% precision!",
 );

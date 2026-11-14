@@ -40,13 +40,36 @@ export class GruCell {
     this.grad_b_ih = new Float32Array(3 * H);
     this.grad_b_hh = new Float32Array(3 * H);
 
-    // Adam optimizer moments
-    this.m_W_ih = Matrix2D.zeros(3 * H, inDim);
-    this.v_W_ih = Matrix2D.zeros(3 * H, inDim);
-    this.m_W_hh = Matrix2D.zeros(3 * H, H);
-    this.v_W_hh = Matrix2D.zeros(3 * H, H);
-    this.m_b = new Float32Array(3 * H);
-    this.v_b = new Float32Array(3 * H);
+    // Reusable sequence workspace buffers (grown on demand for T)
+    this.capT = 0;
+    this.bufU = null;
+    this.bufGH = null;
+    this.bufR = null;
+    this.bufZ = null;
+    this.bufN = null;
+    this.bufHPrev = null;
+    this.bufDU = null;
+    this.bufDX = null;
+    this.bufDGH = new Float32Array(3 * H);
+    this.bufDHPrev = new Float32Array(H);
+    this.bufDHNext = new Float32Array(H);
+  }
+
+  /**
+   * Ensures reusable workspace buffers can hold at least T timesteps.
+   */
+  ensureCapacity(T) {
+    if (T <= this.capT) return;
+    const H = this.hiddenDim;
+    this.capT = T;
+    this.bufU = new Float32Array(T * 3 * H);
+    this.bufGH = new Float32Array(T * 3 * H);
+    this.bufR = new Float32Array(T * H);
+    this.bufZ = new Float32Array(T * H);
+    this.bufN = new Float32Array(T * H);
+    this.bufHPrev = new Float32Array(T * H);
+    this.bufDU = new Float32Array(T * 3 * H);
+    this.bufDX = new Float32Array(T * this.inDim);
   }
 
   /**
@@ -63,10 +86,11 @@ export class GruCell {
    * Pre-projects an entire sequence of inputs X [T x inDim] into input gates [T x 3*H]
    * U = X * W_ih^T + b_ih
    */
-  projectInputSequence(X, T) {
+  projectInputSequence(X, T, outU = null) {
     const H = this.hiddenDim;
-    const U = new Float32Array(T * 3 * H);
+    const U = outU || new Float32Array(T * 3 * H);
     const wData = this.W_ih.data;
+    const bData = this.b_ih;
     const inD = this.inDim;
 
     for (let t = 0; t < T; t++) {
@@ -74,7 +98,7 @@ export class GruCell {
       const uOffset = t * 3 * H;
 
       for (let i = 0; i < 3 * H; i++) {
-        let sum = this.b_ih[i];
+        let sum = bData[i];
         const wRowOffset = i * inD;
         for (let j = 0; j < inD; j++) {
           sum += wData[wRowOffset + j] * X[xOffset + j];
@@ -83,6 +107,141 @@ export class GruCell {
       }
     }
     return U;
+  }
+
+  /**
+   * Zero-allocation sequence forward pass across T timesteps (direction 0 = fwd, 1 = bwd),
+   * writing directly into outH [T x outD] at column offset outOffset.
+   */
+  forwardSequence(X, T, h0, outH, outD, outOffset, reverse = false) {
+    this.ensureCapacity(T);
+    const H = this.hiddenDim;
+    const U = this.projectInputSequence(X, T, this.bufU);
+    const gH = this.bufGH;
+    const rBuf = this.bufR;
+    const zBuf = this.bufZ;
+    const nBuf = this.bufN;
+    const hPrevBuf = this.bufHPrev;
+    const wData = this.W_hh.data;
+    const bData = this.b_hh;
+
+    const hPrev = this.bufDHPrev;
+    if (h0 && !reverse) {
+      for (let j = 0; j < H; j++) hPrev[j] = h0[j];
+    } else {
+      hPrev.fill(0);
+    }
+
+    for (let s = 0; s < T; s++) {
+      const t = reverse ? (T - 1 - s) : s;
+      const hOffset = t * H;
+      const uOffset = t * 3 * H;
+      const outRow = t * outD + outOffset;
+
+      for (let j = 0; j < H; j++) {
+        hPrevBuf[hOffset + j] = hPrev[j];
+      }
+
+      for (let i = 0; i < 3 * H; i++) {
+        let sum = bData[i];
+        const wRow = i * H;
+        for (let j = 0; j < H; j++) {
+          sum += wData[wRow + j] * hPrev[j];
+        }
+        gH[uOffset + i] = sum;
+      }
+
+      for (let j = 0; j < H; j++) {
+        const r = sigmoid(U[uOffset + j] + gH[uOffset + j]);
+        const z = sigmoid(U[uOffset + H + j] + gH[uOffset + H + j]);
+        const n = Math.tanh(U[uOffset + 2 * H + j] + r * gH[uOffset + 2 * H + j]);
+        const hNew = (1.0 - z) * hPrev[j] + z * n;
+
+        rBuf[hOffset + j] = r;
+        zBuf[hOffset + j] = z;
+        nBuf[hOffset + j] = n;
+        hPrev[j] = hNew;
+        outH[outRow + j] = hNew;
+      }
+    }
+  }
+
+  /**
+   * Zero-allocation sequence BPTT across T timesteps, reading cached buffers from forwardSequence.
+   */
+  backwardSequence(dH, X, T, outD, outOffset, reverse = false) {
+    const H = this.hiddenDim;
+    const gH = this.bufGH;
+    const rBuf = this.bufR;
+    const zBuf = this.bufZ;
+    const nBuf = this.bufN;
+    const hPrevBuf = this.bufHPrev;
+    const duSeq = this.bufDU;
+    const dg_h = this.bufDGH;
+    const dhPrev = this.bufDHPrev;
+    const dhNext = this.bufDHNext;
+    const wData = this.W_hh.data;
+    const gradWhh = this.grad_W_hh.data;
+    const gradBhh = this.grad_b_hh;
+    const gradBih = this.grad_b_ih;
+
+    dhNext.fill(0);
+
+    for (let s = 0; s < T; s++) {
+      const t = reverse ? s : (T - 1 - s);
+      const hOffset = t * H;
+      const uOffset = t * 3 * H;
+      const dHRow = t * outD + outOffset;
+
+      for (let j = 0; j < H; j++) {
+        const delta = dH[dHRow + j] + dhNext[j];
+        const r = rBuf[hOffset + j];
+        const z = zBuf[hOffset + j];
+        const n = nBuf[hOffset + j];
+        const hp = hPrevBuf[hOffset + j];
+
+        // 1. Candidate gradient
+        const dn = delta * z;
+        const dCandLinear = dn * (1.0 - n * n);
+        duSeq[uOffset + 2 * H + j] = dCandLinear;
+        dg_h[2 * H + j] = dCandLinear * r;
+        const dr = dCandLinear * gH[uOffset + 2 * H + j];
+
+        // 2. Update gate gradient
+        const dz = delta * (n - hp);
+        const dZLinear = dz * z * (1.0 - z);
+        duSeq[uOffset + H + j] = dZLinear;
+        dg_h[H + j] = dZLinear;
+
+        // 3. Reset gate gradient
+        const dRLinear = dr * r * (1.0 - r);
+        duSeq[uOffset + j] = dRLinear;
+        dg_h[j] = dRLinear;
+
+        // 4. Direct contribution to h_prev
+        dhPrev[j] = delta * (1.0 - z);
+      }
+
+      for (let i = 0; i < 3 * H; i++) {
+        const g = dg_h[i];
+        gradBhh[i] += g;
+        gradBih[i] += duSeq[uOffset + i];
+
+        const rowOffset = i * H;
+        for (let j = 0; j < H; j++) {
+          gradWhh[rowOffset + j] += g * hPrevBuf[hOffset + j];
+          dhPrev[j] += wData[rowOffset + j] * g;
+        }
+      }
+
+      for (let j = 0; j < H; j++) {
+        dhNext[j] = dhPrev[j];
+      }
+    }
+
+    this.accumulateInputGradients(duSeq, X, T);
+    const dX = this.computeInputGradients(duSeq, T, this.bufDX);
+    return { dX, dh0: dhNext };
   }
 
   /**
@@ -223,22 +382,23 @@ export class GruCell {
    * Propagates gradients back to input sequence X [T x inDim]
    * dX = du * W_ih
    */
-  computeInputGradients(duSeq, T) {
+  computeInputGradients(duSeq, T, outDX = null) {
     const H = this.hiddenDim;
     const inD = this.inDim;
-    const dX = new Float32Array(T * inD);
+    const dX = outDX || new Float32Array(T * inD);
+    if (outDX) dX.fill(0, 0, T * inD);
     const wData = this.W_ih.data;
 
     for (let t = 0; t < T; t++) {
       const uOffset = t * 3 * H;
       const xOffset = t * inD;
 
-      for (let j = 0; j < inD; j++) {
-        let sum = 0.0;
-        for (let i = 0; i < 3 * H; i++) {
-          sum += duSeq[uOffset + i] * wData[i * inD + j];
+      for (let i = 0; i < 3 * H; i++) {
+        const du = duSeq[uOffset + i];
+        const wRowOffset = i * inD;
+        for (let j = 0; j < inD; j++) {
+          dX[xOffset + j] += du * wData[wRowOffset + j];
         }
-        dX[xOffset + j] = sum;
       }
     }
     return dX;

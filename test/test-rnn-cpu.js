@@ -107,4 +107,101 @@ console.log(
     "   ✓ Model weights exported and reloaded successfully with identical predictions!",
 );
 
+// 5. Finite-difference gradient check with concat: ["class_head", "input"]
+console.log(
+    "\n5. Verifying analytical BPTT gradients with concat: [\"class_head\", \"input\"]...",
+);
+
+const concatDef = {
+    inDim: 6,
+    layers: [
+        { hiddenDim: 4, bidirectional: true },
+        { hiddenDim: 3, bidirectional: true, concat: ["class_head", "input"] },
+    ],
+    heads: [
+        { name: "class_head", layerIndex: 0, outDim: 4, lossWeight: 0.3 },
+        { name: "seq_head", layerIndex: 1, outDim: 3, lossWeight: 1.0 },
+    ],
+};
+
+const gradNet = new RecurrentNetwork(concatDef);
+const gT = 4;
+const gX = new Float32Array(gT * concatDef.inDim);
+for (let i = 0; i < gX.length; i++) gX[i] = Math.sin(i * 0.7);
+
+for (const targetSet of [
+    {
+        label: "joint loss (class_head + seq_head)",
+        targets: {
+            class_head: new Uint32Array([0, 2, 1, 3]),
+            seq_head: new Uint32Array([2, 0, 1, 2]),
+        },
+    },
+    {
+        label: "downstream-only loss (seq_head only)",
+        targets: {
+            seq_head: new Uint32Array([1, 2, 0, 1]),
+        },
+    },
+]) {
+    gradNet.zeroGrad();
+    gradNet.forward(gX, gT);
+    const analyticalDX = gradNet.backward(targetSet.targets);
+
+    const eps = 5e-3;
+    let maxRelErr = 0;
+    for (const p of gradNet.parameters) {
+        const idx = Math.floor(p.weight.length / 2);
+        const orig = p.weight[idx];
+        p.weight[idx] = orig + eps;
+        gradNet.forward(gX, gT);
+        const lPlus = gradNet.computeLoss(targetSet.targets).totalLoss;
+
+        p.weight[idx] = orig - eps;
+        gradNet.forward(gX, gT);
+        const lMinus = gradNet.computeLoss(targetSet.targets).totalLoss;
+        p.weight[idx] = orig;
+
+        const numGrad = (lPlus - lMinus) / (2 * eps);
+        const anaGrad = p.grad[idx];
+        const denom = Math.max(1e-3, Math.abs(numGrad) + Math.abs(anaGrad));
+        const relErr = Math.abs(numGrad - anaGrad) / denom;
+        if (relErr > maxRelErr) maxRelErr = relErr;
+        if (relErr > 2e-2) {
+            throw new Error(
+                `Gradient mismatch in ${p.name}[${idx}] (${targetSet.label}): num=${numGrad}, ana=${anaGrad}, relErr=${relErr}`,
+            );
+        }
+    }
+
+    // Also verify dRawInput includes skip connection gradient
+    for (let j = 0; j < gX.length; j += 5) {
+        const orig = gX[j];
+        gX[j] = orig + eps;
+        gradNet.forward(gX, gT);
+        const lPlus = gradNet.computeLoss(targetSet.targets).totalLoss;
+        gX[j] = orig - eps;
+        gradNet.forward(gX, gT);
+        const lMinus = gradNet.computeLoss(targetSet.targets).totalLoss;
+        gX[j] = orig;
+
+        const numGrad = (lPlus - lMinus) / (2 * eps);
+        const anaGrad = analyticalDX[j];
+        const denom = Math.max(1e-3, Math.abs(numGrad) + Math.abs(anaGrad));
+        const relErr = Math.abs(numGrad - anaGrad) / denom;
+        if (relErr > maxRelErr) maxRelErr = relErr;
+        if (relErr > 2e-2) {
+            throw new Error(
+                `Input gradient mismatch at dX[${j}] (${targetSet.label}): num=${numGrad}, ana=${anaGrad}, relErr=${relErr}`,
+            );
+        }
+    }
+
+    console.log(
+        `   ✓ ${targetSet.label} gradients verified (max rel err: ${
+            maxRelErr.toExponential(3)
+        })`,
+    );
+}
+
 console.log("\nAll CPU RecurrentNetwork tests passed with 100% success!");

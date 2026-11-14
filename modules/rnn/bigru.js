@@ -22,10 +22,16 @@ export class BidirectionalGru {
 
     this.cachedX = null;
     this.cachedT = 0;
-    this.cachedFwd = [];
-    this.cachedBwd = [];
-    this.cachedU_fwd = null;
-    this.cachedU_bwd = null;
+    this.capT = 0;
+    this.bufOutH = null;
+    this.bufDX = null;
+  }
+
+  ensureCapacity(T) {
+    if (T <= this.capT) return;
+    this.capT = T;
+    this.bufOutH = new Float32Array(T * this.outDim);
+    this.bufDX = new Float32Array(T * this.inDim);
   }
 
   zeroGrad() {
@@ -103,49 +109,16 @@ export class BidirectionalGru {
     const outD = this.outDim;
     this.cachedX = X;
     this.cachedT = T;
-    this.cachedFwd = new Array(T);
-    this.cachedBwd = this.bidirectional ? new Array(T) : null;
+    this.ensureCapacity(T);
 
-    // 1. Parallel Pre-projection of inputs
-    this.cachedU_fwd = this.cellFwd.projectInputSequence(X, T);
+    const outH = this.bufOutH.subarray(0, T * outD);
+
+    // 1. Forward GRU: t = 0 -> T-1 (writes columns 0..H-1)
+    this.cellFwd.forwardSequence(X, T, h0_fwd, outH, outD, 0, false);
+
+    // 2. Backward GRU: t = T-1 -> 0 (writes columns H..2*H-1)
     if (this.bidirectional) {
-      this.cachedU_bwd = this.cellBwd.projectInputSequence(X, T);
-    }
-
-    const outH = new Float32Array(T * outD);
-
-    // 2. Forward GRU: t = 0 -> T-1
-    let hPrevFwd = h0_fwd ? new Float32Array(h0_fwd) : new Float32Array(H);
-
-    for (let t = 0; t < T; t++) {
-      const uOffset = t * 3 * H;
-      const u_t = this.cachedU_fwd.subarray(uOffset, uOffset + 3 * H);
-
-      const stepResult = this.cellFwd.forwardStep(u_t, hPrevFwd);
-      this.cachedFwd[t] = stepResult;
-      hPrevFwd = stepResult.h_t;
-
-      // Copy to output [t, 0..H-1]
-      const outOffset = t * outD;
-      outH.set(stepResult.h_t, outOffset);
-    }
-
-    // 3. Backward GRU: t = T-1 -> 0 (if bidirectional)
-    if (this.bidirectional) {
-      let hPrevBwd = new Float32Array(H); // Backward pass starts at 0
-
-      for (let t = T - 1; t >= 0; t--) {
-        const uOffset = t * 3 * H;
-        const u_t = this.cachedU_bwd.subarray(uOffset, uOffset + 3 * H);
-
-        const stepResult = this.cellBwd.forwardStep(u_t, hPrevBwd);
-        this.cachedBwd[t] = stepResult;
-        hPrevBwd = stepResult.h_t;
-
-        // Copy to output [t, H..2*H-1]
-        const outOffset = t * outD + H;
-        outH.set(stepResult.h_t, outOffset);
-      }
+      this.cellBwd.forwardSequence(X, T, null, outH, outD, H, true);
     }
 
     return outH;
@@ -162,63 +135,34 @@ export class BidirectionalGru {
     const outD = this.outDim;
     const T = this.cachedT;
     const X = this.cachedX;
-
-    const du_fwd_seq = new Float32Array(T * 3 * H);
+    const lenX = T * this.inDim;
 
     // 1. Forward GRU BPTT: propagates backward from t = T-1 -> 0
-    let dhNextFwd = new Float32Array(H);
-    let dh0_fwd = null;
-
-    for (let t = T - 1; t >= 0; t--) {
-      const dh_curr = new Float32Array(H);
-      const dH_offset = t * outD;
-
-      // Direct gradient on forward hidden state at step t
-      for (let j = 0; j < H; j++) {
-        dh_curr[j] = dH[dH_offset + j] + dhNextFwd[j];
-      }
-
-      const { dh_prev, du_t } = this.cellFwd.backwardStep(dh_curr, this.cachedFwd[t].cache);
-      du_fwd_seq.set(du_t, t * 3 * H);
-      dhNextFwd = dh_prev;
-
-      if (t === 0) {
-        dh0_fwd = dh_prev;
-      }
-    }
-
-    // Accumulate input weights for forward cell
-    this.cellFwd.accumulateInputGradients(du_fwd_seq, X, T);
-    const dX_fwd = this.cellFwd.computeInputGradients(du_fwd_seq, T);
+    const { dX: dX_fwd, dh0: dh0_fwd } = this.cellFwd.backwardSequence(
+      dH,
+      X,
+      T,
+      outD,
+      0,
+      false,
+    );
 
     if (!this.bidirectional) {
-      return { dX: dX_fwd, dh0_fwd };
+      return { dX: dX_fwd.subarray(0, lenX), dh0_fwd };
     }
 
     // 2. Backward GRU BPTT: propagates forward from t = 0 -> T-1
-    const du_bwd_seq = new Float32Array(T * 3 * H);
-    let dhNextBwd = new Float32Array(H);
+    const { dX: dX_bwd } = this.cellBwd.backwardSequence(
+      dH,
+      X,
+      T,
+      outD,
+      H,
+      true,
+    );
 
-    for (let t = 0; t < T; t++) {
-      const dh_curr = new Float32Array(H);
-      const dH_offset = t * outD + H;
-
-      // Direct gradient on backward hidden state at step t
-      for (let j = 0; j < H; j++) {
-        dh_curr[j] = dH[dH_offset + j] + dhNextBwd[j];
-      }
-
-      const { dh_prev, du_t } = this.cellBwd.backwardStep(dh_curr, this.cachedBwd[t].cache);
-      du_bwd_seq.set(du_t, t * 3 * H);
-      dhNextBwd = dh_prev;
-    }
-
-    // Accumulate input weights for backward cell
-    this.cellBwd.accumulateInputGradients(du_bwd_seq, X, T);
-    const dX_bwd = this.cellBwd.computeInputGradients(du_bwd_seq, T);
-
-    const dX = new Float32Array(T * this.inDim);
-    for (let i = 0; i < dX.length; i++) {
+    const dX = this.bufDX.subarray(0, lenX);
+    for (let i = 0; i < lenX; i++) {
       dX[i] = dX_fwd[i] + dX_bwd[i];
     }
 

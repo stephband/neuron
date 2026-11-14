@@ -35,15 +35,19 @@ const MAX_H: u32 = 256u;
 var<workgroup> h_shared: array<f32, 256>;
 var<workgroup> h_next: array<f32, 256>;
 
-@compute @workgroup_size(256)
-fn gru_sequence(
-  @builtin(local_invocation_id) local_id: vec3<u32>
-) {
-  let tid = local_id.x;
+fn run_gru_steps(tid: u32, wg_x: u32) {
+  let isBidi = params.direction == 2u;
+  let dir = select(params.direction, wg_x, isBidi);
+  let threeH = 3u * params.H;
+  let uStride = select(threeH, 2u * threeH, isBidi);
+  let uDirOffset = select(0u, dir * threeH, isBidi);
+  let wDirOffset = select(0u, dir * threeH * params.H, isBidi);
+  let bDirOffset = select(0u, dir * threeH, isBidi);
+  let outColOffset = select(params.outOffset, dir * params.H, isBidi);
 
   // Initialize shared state h0 (at step 0 of forward pass, or 0.0)
   if (tid < params.H) {
-    if (params.hasH0 == 1u && params.direction == 0u) {
+    if (params.hasH0 == 1u && dir == 0u) {
       h_shared[tid] = h0[tid];
     } else {
       h_shared[tid] = 0.0;
@@ -54,21 +58,21 @@ fn gru_sequence(
   // Sequential recurrent execution across all time steps
   for (var s: u32 = 0u; s < params.T; s = s + 1u) {
     var t: u32 = s;
-    if (params.direction == 1u) {
+    if (dir == 1u) {
       t = params.T - 1u - s; // Backward: T-1 down to 0
     }
 
     if (tid < params.H) {
-      let uOffset = t * 3u * params.H;
+      let uOffset = t * uStride + uDirOffset;
 
       // 1. Matrix-vector dot products: g_h = W_hh * h_prev + b_hh
-      var sum_r: f32 = b_hh[tid];
-      var sum_z: f32 = b_hh[params.H + tid];
-      var sum_n: f32 = b_hh[2u * params.H + tid];
+      var sum_r: f32 = b_hh[bDirOffset + tid];
+      var sum_z: f32 = b_hh[bDirOffset + params.H + tid];
+      var sum_n: f32 = b_hh[bDirOffset + 2u * params.H + tid];
 
-      let row_r = tid * params.H;
-      let row_z = (params.H + tid) * params.H;
-      let row_n = (2u * params.H + tid) * params.H;
+      let row_r = wDirOffset + tid * params.H;
+      let row_z = wDirOffset + (params.H + tid) * params.H;
+      let row_n = wDirOffset + (2u * params.H + tid) * params.H;
 
       for (var k: u32 = 0u; k < params.H; k = k + 1u) {
         let h_val = h_shared[k];
@@ -95,7 +99,7 @@ fn gru_sequence(
       h_next[tid] = h_new;
 
       // 5. Store hidden state into global sequence buffer
-      outH[t * params.outD + params.outOffset + tid] = h_new;
+      outH[t * params.outD + outColOffset + tid] = h_new;
     }
 
     workgroupBarrier();
@@ -106,5 +110,21 @@ fn gru_sequence(
 
     workgroupBarrier();
   }
+}
+
+@compute @workgroup_size(32)
+fn gru_sequence_32(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  run_gru_steps(local_id.x, workgroup_id.x);
+}
+
+@compute @workgroup_size(256)
+fn gru_sequence(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  run_gru_steps(local_id.x, workgroup_id.x);
 }
 `;

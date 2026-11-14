@@ -12,6 +12,11 @@ import GPUOps from "../gpu/ops.js";
  */
 export class GpuBidirectionalGru {
     constructor(device, inDim, hiddenDim, bidirectional = true) {
+        if (!hiddenDim || hiddenDim <= 0 || hiddenDim > 256) {
+            throw new Error(
+                `GpuBidirectionalGru hiddenDim ${hiddenDim} out of supported range [1, 256]`,
+            );
+        }
         this.device = device;
         this.gpuOps = GPUOps.from(device);
         this.inDim = inDim;
@@ -20,52 +25,71 @@ export class GpuBidirectionalGru {
         this.outDim = bidirectional ? 2 * hiddenDim : hiddenDim;
 
         const H = hiddenDim;
+        const dirCount = bidirectional ? 2 : 1;
 
-        // GPU Buffers for Forward Cell Weights
-        this.bufW_ih_fwd = createStorageBuffer(
+        // Contiguous GPU Buffers for [Fwd (, Bwd)] Cell Weights
+        this.bufW_ih = createStorageBuffer(
             device,
-            3 * H * inDim * 4,
-            "gru_Wih_fwd",
+            dirCount * 3 * H * inDim * 4,
+            "gru_Wih",
         );
-        this.bufB_ih_fwd = createStorageBuffer(
+        this.bufB_ih = createStorageBuffer(
             device,
-            3 * H * 4,
-            "gru_bih_fwd",
+            dirCount * 3 * H * 4,
+            "gru_bih",
         );
-        this.bufW_hh_fwd = createStorageBuffer(
+        this.bufW_hh = createStorageBuffer(
             device,
-            3 * H * H * 4,
-            "gru_Whh_fwd",
+            dirCount * 3 * H * H * 4,
+            "gru_Whh",
         );
-        this.bufB_hh_fwd = createStorageBuffer(
+        this.bufB_hh = createStorageBuffer(
             device,
-            3 * H * 4,
-            "gru_bhh_fwd",
+            dirCount * 3 * H * 4,
+            "gru_bhh",
         );
 
-        // GPU Buffers for Backward Cell Weights (if bidirectional)
-        if (bidirectional) {
-            this.bufW_ih_bwd = createStorageBuffer(
-                device,
-                3 * H * inDim * 4,
-                "gru_Wih_bwd",
-            );
-            this.bufB_ih_bwd = createStorageBuffer(
-                device,
-                3 * H * 4,
-                "gru_bih_bwd",
-            );
-            this.bufW_hh_bwd = createStorageBuffer(
-                device,
-                3 * H * H * 4,
-                "gru_Whh_bwd",
-            );
-            this.bufB_hh_bwd = createStorageBuffer(
-                device,
-                3 * H * 4,
-                "gru_bhh_bwd",
-            );
-        }
+        // Reusable sequence scratch buffers (sized for capT)
+        this.capT = 0;
+        this.bufU = null;
+        this.bufOutH = null;
+    }
+
+    /**
+     * Ensures reusable sequence scratch buffers can hold at least T steps.
+     */
+    ensureScratchBuffers(T) {
+        if (T <= this.capT) return;
+        if (this.bufU) this.bufU.destroy();
+        if (this.bufOutH) this.bufOutH.destroy();
+
+        const H = this.hiddenDim;
+        const outD = this.outDim;
+        const dirCount = this.bidirectional ? 2 : 1;
+        this.capT = T;
+        this.bufU = createStorageBuffer(
+            this.device,
+            T * dirCount * 3 * H * 4,
+            "temp_U",
+        );
+        this.bufOutH = createStorageBuffer(
+            this.device,
+            T * outD * 4,
+            "gru_outH",
+        );
+    }
+
+    /**
+     * Releases all GPU buffers owned by this layer.
+     */
+    destroy() {
+        this.bufW_ih.destroy();
+        this.bufB_ih.destroy();
+        this.bufW_hh.destroy();
+        this.bufB_hh.destroy();
+        if (this.bufU) this.bufU.destroy();
+        if (this.bufOutH) this.bufOutH.destroy();
+        this.capT = 0;
     }
 
     /**
@@ -98,7 +122,7 @@ export class GpuBidirectionalGru {
 
         let cur = offset;
         queue.writeBuffer(
-            this.bufW_ih_fwd,
+            this.bufW_ih,
             0,
             flat.buffer,
             flat.byteOffset + cur * 4,
@@ -106,7 +130,7 @@ export class GpuBidirectionalGru {
         );
         cur += size_Wih;
         queue.writeBuffer(
-            this.bufW_hh_fwd,
+            this.bufW_hh,
             0,
             flat.buffer,
             flat.byteOffset + cur * 4,
@@ -114,7 +138,7 @@ export class GpuBidirectionalGru {
         );
         cur += size_Whh;
         queue.writeBuffer(
-            this.bufB_ih_fwd,
+            this.bufB_ih,
             0,
             flat.buffer,
             flat.byteOffset + cur * 4,
@@ -122,7 +146,7 @@ export class GpuBidirectionalGru {
         );
         cur += size_b;
         queue.writeBuffer(
-            this.bufB_hh_fwd,
+            this.bufB_hh,
             0,
             flat.buffer,
             flat.byteOffset + cur * 4,
@@ -132,32 +156,32 @@ export class GpuBidirectionalGru {
 
         if (this.bidirectional) {
             queue.writeBuffer(
-                this.bufW_ih_bwd,
-                0,
+                this.bufW_ih,
+                size_Wih * 4,
                 flat.buffer,
                 flat.byteOffset + cur * 4,
                 size_Wih * 4,
             );
             cur += size_Wih;
             queue.writeBuffer(
-                this.bufW_hh_bwd,
-                0,
+                this.bufW_hh,
+                size_Whh * 4,
                 flat.buffer,
                 flat.byteOffset + cur * 4,
                 size_Whh * 4,
             );
             cur += size_Whh;
             queue.writeBuffer(
-                this.bufB_ih_bwd,
-                0,
+                this.bufB_ih,
+                size_b * 4,
                 flat.buffer,
                 flat.byteOffset + cur * 4,
                 size_b * 4,
             );
             cur += size_b;
             queue.writeBuffer(
-                this.bufB_hh_bwd,
-                0,
+                this.bufB_hh,
+                size_b * 4,
                 flat.buffer,
                 flat.byteOffset + cur * 4,
                 size_b * 4,
@@ -187,107 +211,40 @@ export class GpuBidirectionalGru {
         const H = this.hiddenDim;
         const inDim = this.inDim;
         const outD = this.outDim;
+        const dirCount = this.bidirectional ? 2 : 1;
 
-        // Temporary intermediate buffers
-        const bufU_mat_fwd = createStorageBuffer(
-            this.device,
-            T * 3 * H * 4,
-            "temp_U_mat_fwd",
-        );
-        const bufU_fwd = createStorageBuffer(
-            this.device,
-            T * 3 * H * 4,
-            "temp_U_fwd",
-        );
-        const bufOutH = createStorageBuffer(
-            this.device,
-            T * outD * 4,
-            "gru_outH",
-        );
+        this.ensureScratchBuffers(T);
+        const bufU = this.bufU;
+        const bufOutH = this.bufOutH;
 
-        // 1. Forward Input Pre-projection: U_fwd = X * W_ih_fwd^T + b_ih_fwd
+        // 1. Combined Input Pre-projection (Fwd + Bwd in single fused GEMM + Bias)
         this.gpuOps.dispatchMatmul(
             bufX,
-            this.bufW_ih_fwd,
-            bufU_mat_fwd,
+            this.bufW_ih,
+            bufU,
             T,
-            3 * H,
+            dirCount * 3 * H,
             inDim,
             false,
             true,
             cmdEncoder,
-        );
-        this.gpuOps.dispatchAddBias(
-            bufU_mat_fwd,
-            this.bufB_ih_fwd,
-            bufU_fwd,
-            T,
-            3 * H,
-            cmdEncoder,
+            this.bufB_ih,
         );
 
-        // 2. Forward Recurrent Sequence Execution (t = 0 -> T-1)
+        // 2. Recurrent Sequence Execution (Fwd and Bwd run in parallel across 2 workgroups)
         this.gpuOps.dispatchGruSequence(
-            bufU_fwd,
-            this.bufW_hh_fwd,
-            this.bufB_hh_fwd,
+            bufU,
+            this.bufW_hh,
+            this.bufB_hh,
             bufH0,
             bufOutH,
             T,
             H,
             outD,
-            0, // offset 0
-            0, // direction forward
+            0,
+            this.bidirectional ? 2 : 0,
             cmdEncoder,
         );
-
-        // 3. Backward Recurrent Sequence Execution (if bidirectional)
-        if (this.bidirectional) {
-            const bufU_mat_bwd = createStorageBuffer(
-                this.device,
-                T * 3 * H * 4,
-                "temp_U_mat_bwd",
-            );
-            const bufU_bwd = createStorageBuffer(
-                this.device,
-                T * 3 * H * 4,
-                "temp_U_bwd",
-            );
-
-            this.gpuOps.dispatchMatmul(
-                bufX,
-                this.bufW_ih_bwd,
-                bufU_mat_bwd,
-                T,
-                3 * H,
-                inDim,
-                false,
-                true,
-                cmdEncoder,
-            );
-            this.gpuOps.dispatchAddBias(
-                bufU_mat_bwd,
-                this.bufB_ih_bwd,
-                bufU_bwd,
-                T,
-                3 * H,
-                cmdEncoder,
-            );
-
-            this.gpuOps.dispatchGruSequence(
-                bufU_bwd,
-                this.bufW_hh_bwd,
-                this.bufB_hh_bwd,
-                null, // Backward pass starts at zero
-                bufOutH,
-                T,
-                H,
-                outD,
-                H, // offset H
-                1, // direction backward
-                cmdEncoder,
-            );
-        }
 
         if (isLocalEncoder) {
             this.device.queue.submit([cmdEncoder.finish()]);

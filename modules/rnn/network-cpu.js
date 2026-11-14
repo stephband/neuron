@@ -1,6 +1,12 @@
 import { Matrix2D } from "../matrix.js";
 import { normalizeWeights } from "../deserialize.js";
 import { BidirectionalGru } from "./bigru.js";
+import {
+    packConcatCpu,
+    resolveHeadMeta,
+    resolveLayerConcat,
+    unpackConcatGradCpu,
+} from "./concat.js";
 import LinearHead from "./linear-head.js";
 
 /**
@@ -28,29 +34,39 @@ export default class RecurrentNetwork {
         this.headConfigs = heads;
 
         // 1. Compose Recurrent Layers (accepts pre-instantiated layers or layer configs)
+        const headMetaByName = resolveHeadMeta(heads, layers.length);
         this.layers = [];
-        let currentInDim = inDim;
+        this.layerConcatSources = [];
 
         for (let l = 0; l < layers.length; l++) {
             const item = layers[l];
+            const baseInDim = l === 0 ? inDim : this.layers[l - 1].outDim;
+            const concatSources = resolveLayerConcat(
+                item.concat,
+                l,
+                inDim,
+                headMetaByName,
+            );
+            this.layerConcatSources.push(concatSources);
+
             if (
                 item instanceof BidirectionalGru ||
                 (item.forward && item.backward)
             ) {
                 this.layers.push(item);
-                currentInDim = item.outDim;
             } else {
+                const layerInDim = baseInDim +
+                    concatSources.reduce((sum, src) => sum + src.dim, 0);
                 const hiddenDim = item.hiddenDim || 48;
                 const bidirectional = item.bidirectional !== undefined
                     ? item.bidirectional
                     : true;
                 const layer = new BidirectionalGru(
-                    currentInDim,
+                    layerInDim,
                     hiddenDim,
                     bidirectional,
                 );
                 this.layers.push(layer);
-                currentInDim = layer.outDim;
             }
         }
 
@@ -196,20 +212,34 @@ export default class RecurrentNetwork {
         }
 
         const layerActivations = [];
-        let currentInput = rawInput;
+        const headOutputs = {};
 
         for (let l = 0; l < this.layers.length; l++) {
             const layer = this.layers[l];
             const layerH0 = l === 0 ? h0 : null;
-            const H = layer.forward(currentInput, T, layerH0);
-            layerActivations.push(H);
-            currentInput = H;
-        }
+            const baseInput = l === 0 ? rawInput : layerActivations[l - 1];
+            const baseDim = l === 0 ? this.inDim : this.layers[l - 1].outDim;
+            const concatSources = this.layerConcatSources[l];
+            const layerInput = concatSources.length
+                ? packConcatCpu(
+                    baseInput,
+                    baseDim,
+                    concatSources,
+                    rawInput,
+                    headOutputs,
+                    T,
+                    layer.inDim,
+                )
+                : baseInput;
 
-        const headOutputs = {};
-        for (const head of this.heads) {
-            const H = layerActivations[head.layerIndex];
-            headOutputs[head.name] = head.forward(H, T);
+            const H = layer.forward(layerInput, T, layerH0);
+            layerActivations.push(H);
+
+            for (const head of this.heads) {
+                if (head.layerIndex === l) {
+                    headOutputs[head.name] = head.forward(H, T);
+                }
+            }
         }
 
         this.forwardCache = {
@@ -278,49 +308,83 @@ export default class RecurrentNetwork {
         const dH_layers = this.layers.map((l) =>
             new Float32Array(T * l.outDim)
         );
+        const dRawInput = new Float32Array(T * this.inDim);
+        const dHeadProbs = {};
 
-        for (const head of this.heads) {
-            const targets = namedTargets[head.name];
-            if (!targets) continue;
-
-            const out = headOutputs[head.name];
-            const probs = out.probs;
-            const outD = head.outDim;
-            const gradLogits = new Float32Array(T * outD);
-            const scale = head.lossWeight / T;
-
-            for (let t = 0; t < T; t++) {
-                const targetClass = targets[t];
-                const offset = t * outD;
-                for (let c = 0; c < outD; c++) {
-                    const y = c === targetClass ? 1.0 : 0.0;
-                    gradLogits[offset + c] = (probs[offset + c] - y) * scale;
-                }
-            }
-
-            const H = layerActivations[head.layerIndex];
-            const dH = dH_layers[head.layerIndex];
-            head.backward(gradLogits, H, T, dH);
-        }
-
-        let dNextLayerInput = null;
         for (let l = this.layers.length - 1; l >= 0; l--) {
+            for (const head of this.heads) {
+                if (head.layerIndex !== l) continue;
+
+                const targets = namedTargets[head.name];
+                const dProbs = dHeadProbs[head.name];
+                if (!targets && !dProbs) continue;
+
+                const out = headOutputs[head.name];
+                const probs = out.probs;
+                const outD = head.outDim;
+                const gradLogits = new Float32Array(T * outD);
+
+                if (targets) {
+                    const scale = head.lossWeight / T;
+                    for (let t = 0; t < T; t++) {
+                        const targetClass = targets[t];
+                        const offset = t * outD;
+                        for (let c = 0; c < outD; c++) {
+                            const y = c === targetClass ? 1.0 : 0.0;
+                            gradLogits[offset + c] += (probs[offset + c] - y) *
+                                scale;
+                        }
+                    }
+                }
+
+                if (dProbs) {
+                    // Backprop through softmax: dL/dz_c = p_c * (dP_c - sum_j p_j * dP_j)
+                    for (let t = 0; t < T; t++) {
+                        const offset = t * outD;
+                        let dot = 0.0;
+                        for (let j = 0; j < outD; j++) {
+                            dot += probs[offset + j] * dProbs[offset + j];
+                        }
+                        for (let c = 0; c < outD; c++) {
+                            gradLogits[offset + c] += probs[offset + c] *
+                                (dProbs[offset + c] - dot);
+                        }
+                    }
+                }
+
+                head.backward(gradLogits, layerActivations[l], T, dH_layers[l]);
+            }
+
             const layer = this.layers[l];
-            const dH = dH_layers[l];
-            if (dNextLayerInput) {
-                for (let i = 0; i < dH.length; i++) {
-                    dH[i] += dNextLayerInput[i];
+            const bptt = layer.backward(dH_layers[l]);
+            const dBaseOut = l > 0 ? dH_layers[l - 1] : dRawInput;
+            const baseDim = l > 0 ? this.layers[l - 1].outDim : this.inDim;
+            const concatSources = this.layerConcatSources[l];
+
+            if (concatSources.length) {
+                unpackConcatGradCpu(
+                    bptt.dX,
+                    baseDim,
+                    concatSources,
+                    dBaseOut,
+                    dRawInput,
+                    dHeadProbs,
+                    T,
+                    layer.inDim,
+                );
+            } else {
+                const dX = bptt.dX;
+                for (let i = 0; i < dX.length; i++) {
+                    dBaseOut[i] += dX[i];
                 }
             }
-            const bptt = layer.backward(dH);
-            dNextLayerInput = bptt.dX;
 
             if (l === 0 && this.priming && bptt.dh0_fwd) {
                 this.backwardPriming(bptt.dh0_fwd, h0, condition);
             }
         }
 
-        return dNextLayerInput;
+        return dRawInput;
     }
 
     backwardPriming(dh0, h0, condition) {

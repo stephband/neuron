@@ -93,10 +93,7 @@ export default class TrainingGPUOps extends GPUOps {
         const cmdEncoder = encoder ||
             this.device.createCommandEncoder({ label: "relu_forward_encoder" });
 
-        const uniformBuffer = createUniformBuffer(
-            this.device,
-            new Uint32Array([rows, cols, 0, 0]),
-        );
+        const uniformBuffer = this.acquireUniformBuffer(rows, cols, 0, 0, 0, 0, 16);
 
         const bindGroup = this.device.createBindGroup({
             layout: this.reluForwardPipeline.getBindGroupLayout(0),
@@ -139,10 +136,7 @@ export default class TrainingGPUOps extends GPUOps {
                 label: "relu_backward_encoder",
             });
 
-        const uniformBuffer = createUniformBuffer(
-            this.device,
-            new Uint32Array([rows, cols, 0, 0]),
-        );
+        const uniformBuffer = this.acquireUniformBuffer(rows, cols, 0, 0, 0, 0, 16);
 
         const bindGroup = this.device.createBindGroup({
             layout: this.reluBackwardPipeline.getBindGroupLayout(0),
@@ -186,10 +180,7 @@ export default class TrainingGPUOps extends GPUOps {
         const cmdEncoder = encoder ||
             this.device.createCommandEncoder({ label: "loss_encoder" });
 
-        const uniformBuffer = createUniformBuffer(
-            this.device,
-            new Uint32Array([batchSize, numClasses, 0, 0]),
-        );
+        const uniformBuffer = this.acquireUniformBuffer(batchSize, numClasses, 0, 0, 0, 0, 16);
 
         const bindGroup = this.device.createBindGroup({
             layout: this.lossPipeline.getBindGroupLayout(0),
@@ -228,10 +219,7 @@ export default class TrainingGPUOps extends GPUOps {
         const cmdEncoder = encoder ||
             this.device.createCommandEncoder({ label: "reduce_cols_encoder" });
 
-        const uniformBuffer = createUniformBuffer(
-            this.device,
-            new Uint32Array([batchSize, cols, 0, 0]),
-        );
+        const uniformBuffer = this.acquireUniformBuffer(batchSize, cols, 0, 0, 0, 0, 16);
 
         const bindGroup = this.device.createBindGroup({
             layout: this.reduceColsPipeline.getBindGroupLayout(0),

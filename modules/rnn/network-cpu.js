@@ -273,12 +273,25 @@ export default class RecurrentNetwork {
 
             let headLoss = 0.0;
             let correct = 0;
+            const isMultiHot = outD > 1 && targets.length === T * outD;
 
-            for (let t = 0; t < T; t++) {
-                const targetClass = targets[t];
-                const p = Math.max(1e-15, probs[t * outD + targetClass]);
-                headLoss -= Math.log(p);
-                if (preds[t] === targetClass) correct++;
+            if (isMultiHot) {
+                for (let t = 0; t < T; t++) {
+                    const offset = t * outD;
+                    let sumP = 0.0;
+                    for (let c = 0; c < outD; c++) {
+                        if (targets[offset + c] > 0) sumP += probs[offset + c];
+                    }
+                    headLoss -= Math.log(Math.max(1e-15, sumP));
+                    if (targets[offset + preds[t]] > 0) correct++;
+                }
+            } else {
+                for (let t = 0; t < T; t++) {
+                    const targetClass = targets[t];
+                    const p = Math.max(1e-15, probs[t * outD + targetClass]);
+                    headLoss -= Math.log(p);
+                    if (preds[t] === targetClass) correct++;
+                }
             }
 
             headLoss /= T;
@@ -326,13 +339,38 @@ export default class RecurrentNetwork {
 
                 if (targets) {
                     const scale = head.lossWeight / T;
-                    for (let t = 0; t < T; t++) {
-                        const targetClass = targets[t];
-                        const offset = t * outD;
-                        for (let c = 0; c < outD; c++) {
-                            const y = c === targetClass ? 1.0 : 0.0;
-                            gradLogits[offset + c] += (probs[offset + c] - y) *
-                                scale;
+                    const isMultiHot = outD > 1 && targets.length === T * outD;
+
+                    if (isMultiHot) {
+                        for (let t = 0; t < T; t++) {
+                            const offset = t * outD;
+                            let sumP = 0.0;
+                            let validCount = 0;
+                            for (let c = 0; c < outD; c++) {
+                                if (targets[offset + c] > 0) {
+                                    sumP += probs[offset + c];
+                                    validCount++;
+                                }
+                            }
+                            if (validCount === 0) continue;
+
+                            for (let c = 0; c < outD; c++) {
+                                const valid = targets[offset + c] > 0;
+                                const y = valid
+                                    ? (sumP > 1e-12 ? probs[offset + c] / sumP : 1.0 / validCount)
+                                    : 0.0;
+                                gradLogits[offset + c] += (probs[offset + c] - y) * scale;
+                            }
+                        }
+                    } else {
+                        for (let t = 0; t < T; t++) {
+                            const targetClass = targets[t];
+                            const offset = t * outD;
+                            for (let c = 0; c < outD; c++) {
+                                const y = c === targetClass ? 1.0 : 0.0;
+                                gradLogits[offset + c] += (probs[offset + c] - y) *
+                                    scale;
+                            }
                         }
                     }
                 }

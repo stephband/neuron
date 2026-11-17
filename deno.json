@@ -1,8 +1,6 @@
 {
     "imports": {
-        "fn/":       "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.7/modules/",
-        "midi/":     "https://cdn.jsdelivr.net/gh/stephband/midi@1.1.x/modules/",
-        "sequence/": "https://cdn.jsdelivr.net/gh/soundio/sequence@0.3.14/modules/"
+        "fn/":       "https://cdn.jsdelivr.net/gh/stephband/fn@1.6.9/modules/"
     },
     "compilerOptions": {
         "strict": true
@@ -18,5 +16,6 @@
         "rules": {
             "tags": ["recommended"]
         }
-    }
+    },
+    "lock": false
 }

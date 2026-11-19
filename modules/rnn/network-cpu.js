@@ -1,18 +1,138 @@
-import { Matrix2D } from "../matrix.js";
 import { normalizeWeights } from "../deserialize.js";
-import { BidirectionalGru } from "./bigru.js";
 import {
     packConcatCpu,
     resolveHeadMeta,
     resolveLayerConcat,
-    unpackConcatGradCpu,
 } from "./concat.js";
-import LinearHead from "./linear-head.js";
+
+function sigmoid(x) {
+    return 1.0 / (1.0 + Math.exp(-Math.max(-85, Math.min(85, x))));
+}
+
+function softmax(logits, T, C) {
+    const probs = new Float32Array(T * C);
+    for (let t = 0; t < T; t++) {
+        const rowOffset = t * C;
+        let maxVal = -Infinity;
+        for (let c = 0; c < C; c++) {
+            const v = logits[rowOffset + c];
+            if (v > maxVal) maxVal = v;
+        }
+        let sumExp = 0.0;
+        for (let c = 0; c < C; c++) {
+            const expVal = Math.exp(logits[rowOffset + c] - maxVal);
+            probs[rowOffset + c] = expVal;
+            sumExp += expVal;
+        }
+        const invSum = 1.0 / (sumExp + 1e-9);
+        for (let c = 0; c < C; c++) {
+            probs[rowOffset + c] *= invSum;
+        }
+    }
+    return probs;
+}
+
+function runDirection(
+    X,
+    T,
+    inD,
+    H,
+    outH,
+    outD,
+    outOffset,
+    Wih,
+    Whh,
+    bih,
+    bhh,
+    h0,
+    reverse,
+) {
+    const H2 = 2 * H;
+    const H3 = 3 * H;
+    const hPrev = new Float32Array(H);
+    const u = new Float32Array(H3);
+    const gh = new Float32Array(H3);
+
+    if (h0 && !reverse) {
+        hPrev.set(h0);
+    }
+
+    for (let s = 0; s < T; s++) {
+        const t = reverse ? (T - 1 - s) : s;
+        const xOff = t * inD;
+        const outRow = t * outD + outOffset;
+
+        for (let i = 0; i < H3; i++) {
+            let s1 = bih[i];
+            let s2 = bhh[i];
+            const w1 = i * inD;
+            const w2 = i * H;
+            for (let j = 0; j < inD; j++) s1 += Wih[w1 + j] * X[xOff + j];
+            for (let j = 0; j < H; j++) s2 += Whh[w2 + j] * hPrev[j];
+            u[i] = s1;
+            gh[i] = s2;
+        }
+
+        for (let j = 0; j < H; j++) {
+            const r = sigmoid(u[j] + gh[j]);
+            const z = sigmoid(u[H + j] + gh[H + j]);
+            const n = Math.tanh(u[H2 + j] + r * gh[H2 + j]);
+            const hNew = (1.0 - z) * hPrev[j] + z * n;
+            hPrev[j] = hNew;
+            outH[outRow + j] = hNew;
+        }
+    }
+}
+
+function projectHead(head, H, T) {
+    const outD = head.outDim;
+    const inD = head.inDim;
+    const W = head.W;
+    const b = head.b;
+    const prior = head.priorBias;
+    const logits = new Float32Array(T * outD);
+
+    for (let t = 0; t < T; t++) {
+        const hOff = t * inD;
+        const lOff = t * outD;
+        for (let c = 0; c < outD; c++) {
+            let sum = b[c] + (prior ? prior[c] : 0.0);
+            const wOff = c * inD;
+            for (let j = 0; j < inD; j++) {
+                sum += H[hOff + j] * W[wOff + j];
+            }
+            logits[lOff + c] = sum;
+        }
+    }
+
+    const probs = softmax(logits, T, outD);
+    const preds = new Uint32Array(T);
+    for (let t = 0; t < T; t++) {
+        const lOff = t * outD;
+        let maxIdx = 0;
+        let maxVal = -Infinity;
+        for (let c = 0; c < outD; c++) {
+            const v = logits[lOff + c];
+            if (v > maxVal) {
+                maxVal = v;
+                maxIdx = c;
+            }
+        }
+        preds[t] = maxIdx;
+    }
+
+    return { logits, probs, preds };
+}
 
 /**
- * RecurrentNetwork: Composable, Configurable Sequence-to-Sequence Recurrent Engine
+ * RNN: Lightweight CPU inference engine for recurrent architectures
+ * (for training / BPTT use `network-train.js`).
  */
-export default class RecurrentNetwork {
+export default class RNN {
+    static async from(definition, weights) {
+        return new this(definition, weights);
+    }
+
     constructor({
         inDim,
         layers = [{ hiddenDim: 48, bidirectional: true }],
@@ -21,23 +141,19 @@ export default class RecurrentNetwork {
             name: "output",
             layerIndex: -1,
             outDim: 1,
-            lossWeight: 1.0,
             priorBias: null,
         }],
     }, weights = null) {
         if (!inDim || inDim <= 0) {
             throw new Error(`Invalid inDim: ${inDim}`);
         }
+
         this.inDim = inDim;
-        this.layerConfigs = layers;
-        this.primingConfig = priming;
-        this.headConfigs = heads;
-
-        // 1. Compose Recurrent Layers (accepts pre-instantiated layers or layer configs)
         const headMetaByName = resolveHeadMeta(heads, layers.length);
-        this.layers = [];
-        this.layerConcatSources = [];
+        this.parameters = [];
 
+        // 1. Layers
+        this.layers = [];
         for (let l = 0; l < layers.length; l++) {
             const item = layers[l];
             const baseInDim = l === 0 ? inDim : this.layers[l - 1].outDim;
@@ -47,125 +163,131 @@ export default class RecurrentNetwork {
                 inDim,
                 headMetaByName,
             );
-            this.layerConcatSources.push(concatSources);
+            const layerInDim = baseInDim +
+                concatSources.reduce((sum, src) => sum + src.dim, 0);
+            const hiddenDim = item.hiddenDim || 48;
+            const bidirectional = item.bidirectional !== undefined
+                ? item.bidirectional
+                : true;
+            const outDim = bidirectional ? 2 * hiddenDim : hiddenDim;
+            const H3 = 3 * hiddenDim;
 
-            if (
-                item instanceof BidirectionalGru ||
-                (item.forward && item.backward)
-            ) {
-                this.layers.push(item);
-            } else {
-                const layerInDim = baseInDim +
-                    concatSources.reduce((sum, src) => sum + src.dim, 0);
-                const hiddenDim = item.hiddenDim || 48;
-                const bidirectional = item.bidirectional !== undefined
-                    ? item.bidirectional
-                    : true;
-                const layer = new BidirectionalGru(
-                    layerInDim,
-                    hiddenDim,
-                    bidirectional,
-                );
-                this.layers.push(layer);
-            }
+            const layer = {
+                inDim: layerInDim,
+                hiddenDim,
+                bidirectional,
+                outDim,
+                concatSources,
+                Wih_fwd: new Float32Array(H3 * layerInDim),
+                Whh_fwd: new Float32Array(H3 * hiddenDim),
+                bih_fwd: new Float32Array(H3),
+                bhh_fwd: new Float32Array(H3),
+                Wih_bwd: bidirectional ? new Float32Array(H3 * layerInDim) : null,
+                Whh_bwd: bidirectional ? new Float32Array(H3 * hiddenDim) : null,
+                bih_bwd: bidirectional ? new Float32Array(H3) : null,
+                bhh_bwd: bidirectional ? new Float32Array(H3) : null,
+            };
+            this.layers.push(layer);
         }
 
-        // 2. Condition Priming Projection (Optional)
+        // 2. Priming (Optional)
         this.priming = null;
         if (priming) {
             const H0 = this.layers[0].hiddenDim;
             const pDim = priming.inDim;
-            const pType = priming.type || "categorical";
-
             this.priming = {
-                type: pType,
+                type: priming.type || "categorical",
                 inDim: pDim,
-                W: Matrix2D.randomXavier(H0, pDim),
+                W: new Float32Array(H0 * pDim),
                 b: new Float32Array(H0),
-                gradW: Matrix2D.zeros(H0, pDim),
-                gradB: new Float32Array(H0),
             };
-        }
-
-        // 3. Compose Output Projection Heads (accepts LinearHead instances or configs)
-        this.heads = [];
-        for (let h = 0; h < heads.length; h++) {
-            const item = heads[h];
-            if (item instanceof LinearHead) {
-                this.heads.push(item);
-            } else {
-                let layerIdx = item.layerIndex !== undefined
-                    ? item.layerIndex
-                    : -1;
-                if (layerIdx < 0) layerIdx = this.layers.length + layerIdx;
-                if (layerIdx < 0 || layerIdx >= this.layers.length) {
-                    throw new Error(
-                        `Head layerIndex ${layerIdx} out of range [0, ${
-                            this.layers.length - 1
-                        }]`,
-                    );
-                }
-                const layerOutDim = this.layers[layerIdx].outDim;
-                const head = new LinearHead({
-                    name: item.name || `head_${h}`,
-                    layerIndex: layerIdx,
-                    inDim: layerOutDim,
-                    outDim: item.outDim,
-                    lossWeight: item.lossWeight !== undefined
-                        ? item.lossWeight
-                        : 1.0,
-                    priorBias: item.priorBias,
-                });
-                this.heads.push(head);
-            }
-        }
-
-        // 4. Register all parameters for Optimizer
-        this.stepCount = 0;
-        this.parameters = [];
-
-        if (this.priming) {
             this.parameters.push(
-                {
-                    name: "priming_W",
-                    weight: this.priming.W.data,
-                    grad: this.priming.gradW.data,
-                },
-                {
-                    name: "priming_b",
-                    weight: this.priming.b,
-                    grad: this.priming.gradB,
-                },
+                { name: "priming_W", weight: this.priming.W },
+                { name: "priming_b", weight: this.priming.b },
             );
         }
 
         for (let l = 0; l < this.layers.length; l++) {
+            const layer = this.layers[l];
             this.parameters.push(
-                ...this.layers[l].getParameters(`layer${l}`),
+                { name: `layer${l}_Wih_fwd`, weight: layer.Wih_fwd },
+                { name: `layer${l}_Whh_fwd`, weight: layer.Whh_fwd },
+                { name: `layer${l}_bih_fwd`, weight: layer.bih_fwd },
+                { name: `layer${l}_bhh_fwd`, weight: layer.bhh_fwd },
+            );
+            if (layer.bidirectional) {
+                this.parameters.push(
+                    { name: `layer${l}_Wih_bwd`, weight: layer.Wih_bwd },
+                    { name: `layer${l}_Whh_bwd`, weight: layer.Whh_bwd },
+                    { name: `layer${l}_bih_bwd`, weight: layer.bih_bwd },
+                    { name: `layer${l}_bhh_bwd`, weight: layer.bhh_bwd },
+                );
+            }
+        }
+
+        // 3. Output Heads
+        this.heads = [];
+        for (let h = 0; h < heads.length; h++) {
+            const item = heads[h];
+            let layerIdx = item.layerIndex !== undefined ? item.layerIndex : -1;
+            if (layerIdx < 0) layerIdx = this.layers.length + layerIdx;
+            if (layerIdx < 0 || layerIdx >= this.layers.length) {
+                throw new Error(
+                    `Head layerIndex ${layerIdx} out of range [0, ${
+                        this.layers.length - 1
+                    }]`,
+                );
+            }
+            const headInDim = this.layers[layerIdx].outDim;
+            const head = {
+                name: item.name || `head_${h}`,
+                layerIndex: layerIdx,
+                inDim: headInDim,
+                outDim: item.outDim,
+                priorBias: item.priorBias ? new Float32Array(item.priorBias) : null,
+                W: new Float32Array(item.outDim * headInDim),
+                b: new Float32Array(item.outDim),
+            };
+            this.heads.push(head);
+            this.parameters.push(
+                { name: `head_${head.name}_W`, weight: head.W },
+                { name: `head_${head.name}_b`, weight: head.b },
             );
         }
-
-        for (const head of this.heads) {
-            this.parameters.push(...head.getParameters());
-        }
-
-        // Adam moment state caches
-        this.adamM = new Float32Array(
-            this.parameters.reduce((sum, p) => sum + p.weight.length, 0),
-        );
-        this.adamV = new Float32Array(this.adamM.length);
-        let pOffset = 0;
-        for (const p of this.parameters) {
-            p.mSlice = this.adamM.subarray(pOffset, pOffset + p.weight.length);
-            p.vSlice = this.adamV.subarray(pOffset, pOffset + p.weight.length);
-            pOffset += p.weight.length;
-        }
-
-        this.forwardCache = null;
 
         if (weights) {
             this.loadWeights(weights);
         }
+    }
+
+    get parameterCount() {
+        let total = 0;
+        for (let i = 0; i < this.parameters.length; i++) {
+            total += this.parameters[i].weight.length;
+        }
+        return total;
+    }
+
+    loadWeights(weightsOrArray) {
+        if (
+            weightsOrArray instanceof ArrayBuffer ||
+            ArrayBuffer.isView(weightsOrArray)
+        ) {
+            const flat = normalizeWeights(weightsOrArray, this.parameterCount);
+            let offset = 0;
+            for (const p of this.parameters) {
+                p.weight.set(flat.subarray(offset, offset + p.weight.length));
+                offset += p.weight.length;
+            }
+            return this;
+        }
+        const weights = weightsOrArray.weights || weightsOrArray;
+        for (const p of this.parameters) {
+            if (weights[p.name]) {
+                p.weight.set(weights[p.name]);
+            }
+        }
+        return this;
     }
 
     computePrimingH0(condition) {
@@ -173,7 +295,7 @@ export default class RecurrentNetwork {
         const H0 = this.layers[0].hiddenDim;
         const h0 = new Float32Array(H0);
         const b = this.priming.b;
-        const W = this.priming.W.data;
+        const W = this.priming.W;
         const pDim = this.priming.inDim;
 
         if (this.priming.type === "categorical") {
@@ -211,7 +333,7 @@ export default class RecurrentNetwork {
             h0 = this.computePrimingH0(options.condition);
         }
 
-        const layerActivations = [];
+        const layerActivations = new Array(this.layers.length);
         const headOutputs = {};
 
         for (let l = 0; l < this.layers.length; l++) {
@@ -219,12 +341,11 @@ export default class RecurrentNetwork {
             const layerH0 = l === 0 ? h0 : null;
             const baseInput = l === 0 ? rawInput : layerActivations[l - 1];
             const baseDim = l === 0 ? this.inDim : this.layers[l - 1].outDim;
-            const concatSources = this.layerConcatSources[l];
-            const layerInput = concatSources.length
+            const layerInput = layer.concatSources.length
                 ? packConcatCpu(
                     baseInput,
                     baseDim,
-                    concatSources,
+                    layer.concatSources,
                     rawInput,
                     headOutputs,
                     T,
@@ -232,460 +353,53 @@ export default class RecurrentNetwork {
                 )
                 : baseInput;
 
-            const H = layer.forward(layerInput, T, layerH0);
-            layerActivations.push(H);
+            const H = new Float32Array(T * layer.outDim);
+            runDirection(
+                layerInput,
+                T,
+                layer.inDim,
+                layer.hiddenDim,
+                H,
+                layer.outDim,
+                0,
+                layer.Wih_fwd,
+                layer.Whh_fwd,
+                layer.bih_fwd,
+                layer.bhh_fwd,
+                layerH0,
+                false,
+            );
+            if (layer.bidirectional) {
+                runDirection(
+                    layerInput,
+                    T,
+                    layer.inDim,
+                    layer.hiddenDim,
+                    H,
+                    layer.outDim,
+                    layer.hiddenDim,
+                    layer.Wih_bwd,
+                    layer.Whh_bwd,
+                    layer.bih_bwd,
+                    layer.bhh_bwd,
+                    null,
+                    true,
+                );
+            }
+
+            layerActivations[l] = H;
 
             for (const head of this.heads) {
                 if (head.layerIndex === l) {
-                    headOutputs[head.name] = head.forward(H, T);
+                    headOutputs[head.name] = projectHead(head, H, T);
                 }
             }
         }
-
-        this.forwardCache = {
-            rawInput,
-            T,
-            h0,
-            condition: options.condition,
-            layerActivations,
-            headOutputs,
-        };
 
         return headOutputs;
     }
 
-    computeLoss(namedTargets) {
-        if (!this.forwardCache) {
-            throw new Error("Cannot compute loss before forward pass");
-        }
-        const { T, headOutputs } = this.forwardCache;
-        let totalLoss = 0.0;
-        const headResults = {};
-
-        for (const head of this.heads) {
-            const targets = namedTargets[head.name];
-            if (!targets) continue;
-
-            const out = headOutputs[head.name];
-            const probs = out.probs;
-            const preds = out.preds;
-            const outD = head.outDim;
-
-            let headLoss = 0.0;
-            let correct = 0;
-            const isMultiHot = outD > 1 && targets.length === T * outD;
-
-            if (isMultiHot) {
-                for (let t = 0; t < T; t++) {
-                    const offset = t * outD;
-                    let sumP = 0.0;
-                    for (let c = 0; c < outD; c++) {
-                        if (targets[offset + c] > 0) sumP += probs[offset + c];
-                    }
-                    headLoss -= Math.log(Math.max(1e-15, sumP));
-                    if (targets[offset + preds[t]] > 0) correct++;
-                }
-            } else {
-                for (let t = 0; t < T; t++) {
-                    const targetClass = targets[t];
-                    const p = Math.max(1e-15, probs[t * outD + targetClass]);
-                    headLoss -= Math.log(p);
-                    if (preds[t] === targetClass) correct++;
-                }
-            }
-
-            headLoss /= T;
-            const accuracy = correct / T;
-            totalLoss += head.lossWeight * headLoss;
-
-            headResults[head.name] = {
-                loss: headLoss,
-                acc: accuracy,
-                weightedLoss: head.lossWeight * headLoss,
-            };
-        }
-
-        return {
-            totalLoss,
-            heads: headResults,
-        };
-    }
-
-    backward(namedTargets) {
-        if (!this.forwardCache) {
-            throw new Error("Cannot run backward before forward pass");
-        }
-        const { T, h0, condition, layerActivations, headOutputs } =
-            this.forwardCache;
-
-        const dH_layers = this.layers.map((l) =>
-            new Float32Array(T * l.outDim)
-        );
-        const dRawInput = new Float32Array(T * this.inDim);
-        const dHeadProbs = {};
-
-        for (let l = this.layers.length - 1; l >= 0; l--) {
-            for (const head of this.heads) {
-                if (head.layerIndex !== l) continue;
-
-                const targets = namedTargets[head.name];
-                const dProbs = dHeadProbs[head.name];
-                if (!targets && !dProbs) continue;
-
-                const out = headOutputs[head.name];
-                const probs = out.probs;
-                const outD = head.outDim;
-                const gradLogits = new Float32Array(T * outD);
-
-                if (targets) {
-                    const scale = head.lossWeight / T;
-                    const isMultiHot = outD > 1 && targets.length === T * outD;
-
-                    if (isMultiHot) {
-                        for (let t = 0; t < T; t++) {
-                            const offset = t * outD;
-                            let sumP = 0.0;
-                            let validCount = 0;
-                            for (let c = 0; c < outD; c++) {
-                                if (targets[offset + c] > 0) {
-                                    sumP += probs[offset + c];
-                                    validCount++;
-                                }
-                            }
-                            if (validCount === 0) continue;
-
-                            for (let c = 0; c < outD; c++) {
-                                const valid = targets[offset + c] > 0;
-                                const y = valid
-                                    ? (sumP > 1e-12 ? probs[offset + c] / sumP : 1.0 / validCount)
-                                    : 0.0;
-                                gradLogits[offset + c] += (probs[offset + c] - y) * scale;
-                            }
-                        }
-                    } else {
-                        for (let t = 0; t < T; t++) {
-                            const targetClass = targets[t];
-                            const offset = t * outD;
-                            for (let c = 0; c < outD; c++) {
-                                const y = c === targetClass ? 1.0 : 0.0;
-                                gradLogits[offset + c] += (probs[offset + c] - y) *
-                                    scale;
-                            }
-                        }
-                    }
-                }
-
-                if (dProbs) {
-                    // Backprop through softmax: dL/dz_c = p_c * (dP_c - sum_j p_j * dP_j)
-                    for (let t = 0; t < T; t++) {
-                        const offset = t * outD;
-                        let dot = 0.0;
-                        for (let j = 0; j < outD; j++) {
-                            dot += probs[offset + j] * dProbs[offset + j];
-                        }
-                        for (let c = 0; c < outD; c++) {
-                            gradLogits[offset + c] += probs[offset + c] *
-                                (dProbs[offset + c] - dot);
-                        }
-                    }
-                }
-
-                head.backward(gradLogits, layerActivations[l], T, dH_layers[l]);
-            }
-
-            const layer = this.layers[l];
-            const bptt = layer.backward(dH_layers[l]);
-            const dBaseOut = l > 0 ? dH_layers[l - 1] : dRawInput;
-            const baseDim = l > 0 ? this.layers[l - 1].outDim : this.inDim;
-            const concatSources = this.layerConcatSources[l];
-
-            if (concatSources.length) {
-                unpackConcatGradCpu(
-                    bptt.dX,
-                    baseDim,
-                    concatSources,
-                    dBaseOut,
-                    dRawInput,
-                    dHeadProbs,
-                    T,
-                    layer.inDim,
-                );
-            } else {
-                const dX = bptt.dX;
-                for (let i = 0; i < dX.length; i++) {
-                    dBaseOut[i] += dX[i];
-                }
-            }
-
-            if (l === 0 && this.priming && bptt.dh0_fwd) {
-                this.backwardPriming(bptt.dh0_fwd, h0, condition);
-            }
-        }
-
-        return dRawInput;
-    }
-
-    backwardPriming(dh0, h0, condition) {
-        if (!this.priming || !dh0) return;
-        const H0 = this.layers[0].hiddenDim;
-        const pDim = this.priming.inDim;
-        const gradW = this.priming.gradW.data;
-        const gradB = this.priming.gradB;
-
-        const dPreact = new Float32Array(H0);
-        for (let i = 0; i < H0; i++) {
-            const dtanh = 1.0 - h0[i] * h0[i];
-            dPreact[i] = dh0[i] * dtanh;
-            gradB[i] += dPreact[i];
-        }
-
-        if (this.priming.type === "categorical") {
-            const col = Number(condition);
-            if (col >= 0 && col < pDim) {
-                for (let i = 0; i < H0; i++) {
-                    gradW[i * pDim + col] += dPreact[i];
-                }
-            }
-        } else {
-            const condVec = condition;
-            for (let i = 0; i < H0; i++) {
-                const rowOffset = i * pDim;
-                const dP = dPreact[i];
-                for (let j = 0; j < pDim; j++) {
-                    gradW[rowOffset + j] += dP * condVec[j];
-                }
-            }
-        }
-    }
-
-    zeroGrad() {
-        for (const p of this.parameters) {
-            p.grad.fill(0);
-        }
-    }
-
-    clipGradients(maxNorm = 5.0) {
-        let sumSq = 0.0;
-        for (const p of this.parameters) {
-            const g = p.grad;
-            for (let i = 0; i < g.length; i++) {
-                sumSq += g[i] * g[i];
-            }
-        }
-        const totalNorm = Math.sqrt(sumSq);
-        if (totalNorm > maxNorm) {
-            const scale = maxNorm / (totalNorm + 1e-6);
-            for (const p of this.parameters) {
-                const g = p.grad;
-                for (let i = 0; i < g.length; i++) {
-                    g[i] *= scale;
-                }
-            }
-        }
-        return totalNorm;
-    }
-
-    adamStep(lr = 0.005, beta1 = 0.9, beta2 = 0.999, eps = 1e-8) {
-        this.stepCount++;
-        const bc1 = 1.0 - Math.pow(beta1, this.stepCount);
-        const bc2 = 1.0 - Math.pow(beta2, this.stepCount);
-
-        for (const p of this.parameters) {
-            const w = p.weight;
-            const g = p.grad;
-            const m = p.mSlice;
-            const v = p.vSlice;
-
-            for (let i = 0; i < w.length; i++) {
-                const grad = g[i];
-                m[i] = beta1 * m[i] + (1.0 - beta1) * grad;
-                v[i] = beta2 * v[i] + (1.0 - beta2) * grad * grad;
-
-                const mHat = m[i] / bc1;
-                const vHat = v[i] / bc2;
-
-                w[i] -= (lr * mHat) / (Math.sqrt(vHat) + eps);
-            }
-        }
-    }
-
-    /**
-     * Performs a single complete training step:
-     * forward, loss, backward, clip gradients, Adam update
-     *
-     * @param {Float32Array|Array} X - Input features sequence [T x inDim]
-     * @param {number} T - Sequence length
-     * @param {*} condition - Optional priming condition (scalar or vector)
-     * @param {Object} targets - Target classes per head { [headName]: targets }
-     * @param {number} [lr=0.005] - Learning rate
-     * @returns {Object} Training step results with loss, heads, and gradNorm
-     */
-    trainStep(X, T, condition, targets, lr = 0.005) {
-        this.zeroGrad();
-        const options = condition !== undefined && condition !== null
-            ? { condition }
-            : {};
-        const forwardResults = this.forward(X, T, options);
-        const lossResults = this.computeLoss(targets);
-        this.backward(targets);
-        const gradNorm = this.clipGradients(5.0);
-        this.adamStep(lr);
-
-        return {
-            totalLoss: lossResults.totalLoss,
-            heads: lossResults.heads,
-            gradNorm,
-            forwardResults,
-        };
-    }
-
-    /**
-     * Trains the recurrent network over multiple epochs on a dataset.
-     *
-     * @param {Array<Object>} dataset - Array of samples:
-     *   { features|X|input, length|T, condition|h0, targets }
-     * @param {Object} [options]
-     * @param {number} [options.epochs=80] - Number of epochs
-     * @param {number} [options.lr=0.01] - Adam learning rate
-     * @param {number} [options.logInterval=10] - Log progress every N epochs (0 disables)
-     * @param {boolean} [options.shuffle=true] - Shuffle dataset each epoch
-     * @param {Function} [options.onEpoch] - Callback ({ epoch, loss, heads }) => void
-     * @returns {{ epochs: number, finalLoss: number, heads: Object, duration: number }}
-     */
-    train(dataset, {
-        epochs = 80,
-        lr = 0.01,
-        logInterval = 10,
-        shuffle = true,
-        onEpoch = null,
-    } = {}) {
-        const startTime = performance.now();
-        let finalLoss = Infinity;
-        const finalHeads = {};
-
-        for (let epoch = 1; epoch <= epochs; epoch++) {
-            if (shuffle) {
-                for (let i = dataset.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    const temp = dataset[i];
-                    dataset[i] = dataset[j];
-                    dataset[j] = temp;
-                }
-            }
-
-            let totalLoss = 0.0;
-            const headTotals = {};
-            for (const head of this.heads) {
-                headTotals[head.name] = { loss: 0.0, acc: 0.0 };
-            }
-
-            for (const sample of dataset) {
-                const X = sample.features || sample.X || sample.input;
-                const T = sample.length ?? sample.T;
-                const condition = sample.condition ?? sample.h0;
-                const targets = sample.targets || sample.namedTargets || sample;
-
-                const step = this.trainStep(X, T, condition, targets, lr);
-
-                totalLoss += step.totalLoss;
-                for (const head of this.heads) {
-                    const hRes = step.heads?.[head.name];
-                    if (hRes) {
-                        headTotals[head.name].loss += hRes.loss;
-                        headTotals[head.name].acc += hRes.acc;
-                    }
-                }
-            }
-
-            const count = dataset.length;
-            const avgLoss = totalLoss / count;
-            const headAverages = {};
-            for (const head of this.heads) {
-                headAverages[head.name] = {
-                    loss: headTotals[head.name].loss / count,
-                    acc: (headTotals[head.name].acc / count) * 100,
-                };
-            }
-
-            finalLoss = avgLoss;
-            Object.assign(finalHeads, headAverages);
-
-            if (onEpoch) {
-                onEpoch({ epoch, loss: avgLoss, heads: headAverages });
-            }
-
-            if (
-                logInterval &&
-                (epoch === 1 || epoch % logInterval === 0 || epoch === epochs)
-            ) {
-                const headLogs = this.heads
-                    .filter((h) => headAverages[h.name])
-                    .map((h) =>
-                        `${h.name} Acc: ${headAverages[h.name].acc.toFixed(1)}%`
-                    )
-                    .join(" | ");
-
-                console.log(
-                    `   Epoch ${String(epoch).padStart(3)} | ` +
-                        `Loss: ${avgLoss.toFixed(4)}${
-                            headLogs ? " | " + headLogs : ""
-                        }`,
-                );
-            }
-        }
-
-        const duration = Number(
-            ((performance.now() - startTime) / 1000).toFixed(2),
-        );
-        return {
-            epochs,
-            finalLoss,
-            heads: finalHeads,
-            duration,
-        };
-    }
-
-    exportWeights() {
-        const weights = {};
-        for (const p of this.parameters) {
-            weights[p.name] = new Float32Array(p.weight);
-        }
-        return {
-            config: {
-                inDim: this.inDim,
-                layerConfigs: this.layerConfigs,
-                primingConfig: this.primingConfig,
-                headConfigs: this.headConfigs,
-            },
-            weights,
-        };
-    }
-
-    get parameterCount() {
-        return this.parameters.reduce((sum, p) => sum + p.weight.length, 0);
-    }
-
-    loadWeights(weightsOrArray) {
-        if (
-            weightsOrArray instanceof ArrayBuffer ||
-            ArrayBuffer.isView(weightsOrArray)
-        ) {
-            const flat = normalizeWeights(weightsOrArray, this.parameterCount);
-            let offset = 0;
-            for (const p of this.parameters) {
-                p.weight.set(flat.subarray(offset, offset + p.weight.length));
-                offset += p.weight.length;
-            }
-            return this;
-        }
-        const weights = weightsOrArray.weights || weightsOrArray;
-        for (const p of this.parameters) {
-            if (weights[p.name]) {
-                p.weight.set(weights[p.name]);
-            }
-        }
-        return this;
+    async predict(X, T, options = {}) {
+        return this.forward(X, T, options);
     }
 }
-
-export { LinearHead, RecurrentNetwork };

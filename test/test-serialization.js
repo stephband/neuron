@@ -2,7 +2,7 @@ import { initWebGPU } from "../modules/gpu/context.js";
 import { serializeWeights } from "../modules/serialize.js";
 import deserializeWeights from "../modules/deserialize.js";
 import RNN from "../modules/rnn.js";
-import RecurrentNetwork from "../modules/rnn/network-cpu.js";
+import RecurrentNetwork from "../modules/rnn/network-train.js";
 
 console.log("=== Bare Weights Serialization & GPU/CPU Round-Trip ===\n");
 

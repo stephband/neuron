@@ -1,4 +1,4 @@
-import RecurrentNetwork from "../modules/rnn/network-cpu.js";
+import RecurrentNetwork from "../modules/rnn/network-train.js";
 
 console.log("=== CPU Recurrent Neural Network Verification ===\n");
 

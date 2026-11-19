@@ -4,7 +4,7 @@ import { createStorageBuffer, readFromBuffer } from "../modules/gpu/buffer.js";
 import { BidirectionalGru } from "../modules/rnn/bigru.js";
 import { extractWeightsArray } from "../modules/serialize.js";
 import RNN from "../modules/rnn.js";
-import RecurrentNetwork from "../modules/rnn/network-cpu.js";
+import RecurrentNetwork from "../modules/rnn/network-train.js";
 
 console.log("=== WebGPU Recurrent Neural Network Verification ===\n");
 
